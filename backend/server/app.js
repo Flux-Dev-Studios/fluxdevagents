@@ -2,6 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import bcrypt from 'bcryptjs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { pool } from './db.js';
 import { clearSession, createSession, requireAdmin, requireRole, requireUser } from './middleware.js';
 
@@ -10,6 +12,7 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
 }
 
 const app = express();
+const frontendBuild = resolve(dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 app.use((req, res, next) => { req.db = pool; next(); });
@@ -192,11 +195,23 @@ app.post('/api/shifts/clock-out', requireUser, requireRole('call-agent', 'contac
   return res.json({ shift: rows[0] });
 }));
 
+if (process.env.SERVE_FRONTEND === 'true') {
+  app.use(express.static(frontendBuild));
+  app.get('*', (req, res, next) => {
+    if (req.path === '/api' || req.path.startsWith('/api/')) return next();
+    return res.sendFile(resolve(frontendBuild, 'index.html'));
+  });
+}
+
 app.use((error, _req, res, _next) => {
   console.error(error);
   if (error.code === '23503') return res.status(400).json({ error: 'A referenced account or contact no longer exists.' });
   return res.status(500).json({ error: 'Server error. Check the server log.' });
 });
 
-const port = Number(process.env.PORT || 3001);
-app.listen(port, () => console.log(`Flux Dev API listening on http://localhost:${port}`));
+export default app;
+
+if (!process.env.VERCEL) {
+  const port = Number(process.env.PORT || 3001);
+  app.listen(port, () => console.log(`Flux Dev API listening on http://localhost:${port}`));
+}

@@ -17,15 +17,20 @@ if (!process.env.DATABASE_URL || !process.env.JWT_SECRET || !adminEmail || !admi
     console.error('DATABASE_URL must use a simple PostgreSQL database name.');
     process.exitCode = 1;
   } else {
-    const adminUrl = new URL(targetUrl);
-    adminUrl.pathname = '/postgres';
-    const adminClient = new Client({ connectionString: adminUrl.toString(), ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : undefined });
+    const createDatabase = process.env.DB_CREATE_IF_MISSING !== 'false';
+    let adminClient;
     let databaseClient;
   try {
-    await adminClient.connect();
-    const exists = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1', [databaseName]);
-    if (!exists.rowCount) await adminClient.query(`CREATE DATABASE "${databaseName}"`);
-    await adminClient.end();
+    if (createDatabase) {
+      const adminUrl = new URL(targetUrl);
+      adminUrl.pathname = '/postgres';
+      adminClient = new Client({ connectionString: adminUrl.toString(), ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : undefined });
+      await adminClient.connect();
+      const exists = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1', [databaseName]);
+      if (!exists.rowCount) await adminClient.query(`CREATE DATABASE "${databaseName}"`);
+      await adminClient.end();
+      adminClient = undefined;
+    }
 
     databaseClient = new Client({ connectionString: targetUrl.toString(), ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : undefined });
     await databaseClient.connect();
@@ -49,7 +54,7 @@ if (!process.env.DATABASE_URL || !process.env.JWT_SECRET || !adminEmail || !admi
     process.exitCode = 1;
   } finally {
     if (databaseClient) await databaseClient.end().catch(() => {});
-    await adminClient.end().catch(() => {});
+    if (adminClient) await adminClient.end().catch(() => {});
   }
   }
 }

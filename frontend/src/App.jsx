@@ -69,7 +69,7 @@ export default function App() {
   useEffect(() => {
     apiRequest('/auth/session').then(async ({ user: activeUser }) => {
       await loadWorkspace(activeUser);
-    }).catch((error) => { if (error.message !== 'Sign in required.') setApiError('Database API unavailable. Start PostgreSQL and run npm run db:setup.'); }).finally(() => setAuthReady(true));
+    }).catch((error) => { if (error.message !== 'Sign in required.') setApiError('Unable to connect right now. Please try again shortly.'); }).finally(() => setAuthReady(true));
   }, []);
   useEffect(() => { const interval = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(interval); }, []);
   useEffect(() => { if (!toast) return undefined; const timeout = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timeout); }, [toast]);
@@ -82,7 +82,7 @@ export default function App() {
       return 'success';
     } catch (error) {
       if (error.code === 'pending') return 'pending';
-      setApiError(error.message);
+      setApiError(error.message === 'Email or password was not recognized.' ? error.message : 'Unable to sign in right now. Please try again shortly.');
       return 'invalid';
     }
   };
@@ -132,7 +132,7 @@ export default function App() {
     ? ['overview', 'calls', 'team'].includes(page) ? page : 'overview'
     : user?.role === 'contact-generator' ? 'generate' : 'today';
 
-  if (!authReady) return <main className="api-loading"><img className="brand-logo brand-logo-loading" src="/flux-dev-logo.png" alt="Flux Dev" /><b>Connecting to Flux Dev…</b></main>;
+  if (!authReady) return <main className="api-loading" role="status" aria-live="polite" aria-busy="true"><img src="/flux-dev-logo.png" alt="Flux Dev" /><b>Preparing your workspace</b><span className="api-loading-track" aria-hidden="true"><i /></span></main>;
   if (!user) return <Login onLogin={signIn} onRegister={register} serverMessage={apiError} />;
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
