@@ -145,6 +145,30 @@ export default function App() {
       setToast('Staff account approved.');
     } catch (error) { setToast(error.message); }
   };
+  const denyStaff = async (person) => {
+    if (!window.confirm(`Deny the signup request for ${person.name}? They can register again with this email.`)) return;
+    try {
+      await apiRequest(`/team/${person.id}/approval`, { method: 'DELETE' });
+      setStaff((people) => people.filter((item) => item.id !== person.id));
+      setToast('Signup request denied.');
+    } catch (error) { setToast(error.message); }
+  };
+  const deleteStaff = async (person) => {
+    if (!window.confirm(`Delete ${person.name}? This permanently removes their account, call records, shift times, and generated contacts. This cannot be undone.`)) return;
+    try {
+      await apiRequest(`/team/${person.id}`, { method: 'DELETE' });
+      setStaff((people) => people.filter((item) => item.id !== person.id));
+      setLeads((items) => items.filter((item) => item.staffId !== person.id));
+      setShifts((items) => {
+        const next = { ...items };
+        delete next[person.id];
+        return next;
+      });
+      setContactPool((items) => items.filter((item) => item.generatorId !== person.id));
+      setContactActivity((items) => items.filter((item) => item.generatorId !== person.id));
+      setToast('Staff account deleted.');
+    } catch (error) { setToast(error.message); }
+  };
   const updateStaffRole = async (id, role) => {
     try {
       await apiRequest(`/team/${id}/role`, { method: 'PATCH', body: JSON.stringify({ role }) });
@@ -215,7 +239,7 @@ export default function App() {
         {user.role === 'call-agent' && activePage === 'today' && <StaffToday user={user} leads={staffLeads} shift={activeShift} elapsed={elapsed} onClockIn={clockIn} onClockOut={clockOut} onUpdate={updateLead} now={now} />}
         {user.role === 'admin' && activePage === 'overview' && <AdminOverview leads={dailyCalls} shifts={shifts} now={now} onNavigate={setPage} staff={staff.filter((person) => person.approved)} contacts={contactPool} contactActivity={contactActivity} />}
         {user.role === 'admin' && activePage === 'calls' && <DailyCallsPage leads={dailyCalls} contacts={contactPool} staff={staff.filter((person) => person.approved && person.role === 'call-agent')} onCheckDuplicates={(calls, contactIds) => apiRequest('/calls/check-duplicates', { method: 'POST', body: JSON.stringify({ calls, contactIds }) })} onAssign={async (newCalls, contactIds) => { const result = await apiRequest('/calls/assign', { method: 'POST', body: JSON.stringify({ calls: newCalls, contactIds }) }); setLeads((current) => [...current, ...result.calls]); setContactPool((current) => current.filter((contact) => !contactIds.includes(contact.id))); setToast(`${result.calls.length} calls shared across the team.`); }} />}
-        {user.role === 'admin' && activePage === 'team' && <TeamApprovals staff={staff} onApprove={approveStaff} onRoleChange={updateStaffRole} />}
+        {user.role === 'admin' && activePage === 'team' && <TeamApprovals staff={staff} onApprove={approveStaff} onDeny={denyStaff} onDelete={deleteStaff} onRoleChange={updateStaffRole} />}
         {user.role === 'contact-generator' && activePage === 'generate' && <ContactGenerator user={user} shift={activeShift} elapsed={elapsed} onClockIn={clockIn} onClockOut={clockOut} onSave={async (contacts) => { const result = await apiRequest('/contacts/batch', { method: 'POST', body: JSON.stringify({ contacts }) }); setToast(`${result.contacts.length} contact${result.contacts.length === 1 ? '' : 's'} saved for admin review.`); }} />}
       </div>
     </main>
@@ -556,15 +580,15 @@ function AddLeadsModal({ onClose, onAdd }) {
   };
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><form className="add-modal" onSubmit={submit}><div className="modal-head"><div><div className="section-eyebrow">GROW THE CALL LIST</div><h2>Add businesses</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="modal-tabs"><button type="button" className={mode === 'single' ? 'selected' : ''} onClick={() => { setMode('single'); setError(''); }}>Single business</button><button type="button" className={mode === 'bulk' ? 'selected' : ''} onClick={() => { setMode('bulk'); setError(''); }}>Paste a list</button></div>{mode === 'single' ? <div className="form-grid"><label>Business name<input value={business} onChange={(event) => setBusiness(event.target.value)} placeholder="e.g. Cedar Street Cafe" /></label><label>Phone number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+1 415 555 0100" /></label><label>Contact name <span>OPTIONAL</span><input value={contact} onChange={(event) => setContact(event.target.value)} placeholder="Owner or manager" /></label><label>Category<input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Restaurant, salon..." /></label><label className="full-field">Location <span>OPTIONAL</span><input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="City, State" /></label></div> : <><label className="bulk-label">One business per line, comma-separated: name, phone, contact, category, location, website<textarea rows="7" value={bulk} onChange={(event) => setBulk(event.target.value)} placeholder={'Cedar Street Cafe, +1 415 555 0100, Mina, Cafe, Oakland CA, No website\nHarbor Dental, +1 415 555 0102, Alex, Dental, Alameda CA, Facebook only'} /></label><p className="bulk-hint">Business name and phone are required; other fields are optional. Leads will be split evenly when assigned to everyone.</p></>}<label className="assign-label">Assign to<select value={assignee} onChange={(event) => setAssignee(event.target.value)}><option value="all">Distribute evenly across all agents</option>{STAFF.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Plus size={15} /> Add to call list</button></div></form></div>;
 }
-function TeamApprovals({ staff, onApprove, onRoleChange }) {
+function TeamApprovals({ staff, onApprove, onDeny, onDelete, onRoleChange }) {
   const pending = staff.filter((person) => !person.approved);
   const approved = staff.filter((person) => person.approved);
-  return <><PageHeading kicker="ACCESS CONTROL" title="Team & approvals" description="Approve new accounts and choose each person’s role." /><section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">WAITING FOR APPROVAL</div><h2>New account requests</h2></div><span className="count-chip">{pending.length} waiting</span></div>{pending.length ? pending.map((person) => <PendingApprovalRow key={person.id} person={person} onApprove={onApprove} />) : <div className="empty-state">No new account requests.</div>}</section><section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">APPROVED ACCOUNTS</div><h2>Staff roles</h2></div><span className="count-chip">{approved.length}</span></div>{approved.filter((person) => person.role !== 'admin').map((person) => <div className="approval-row" key={person.id}><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><RoleSelect id={`role-${person.id}`} ariaLabel={`Role for ${person.name}`} value={person.role} onChange={(role) => onRoleChange(person.id, role)} /></div>)}</section></>;
+  return <><PageHeading kicker="ACCESS CONTROL" title="Team & approvals" description="Approve or deny signup requests, manage staff roles, and remove staff accounts." /><section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">WAITING FOR APPROVAL</div><h2>New account requests</h2></div><span className="count-chip">{pending.length} waiting</span></div>{pending.length ? pending.map((person) => <PendingApprovalRow key={person.id} person={person} onApprove={onApprove} onDeny={onDeny} />) : <div className="empty-state">No new account requests.</div>}</section><section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">APPROVED ACCOUNTS</div><h2>Staff roles</h2></div><span className="count-chip">{approved.length}</span></div>{approved.filter((person) => person.role !== 'admin').map((person) => <div className="approval-row" key={person.id}><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><RoleSelect id={`role-${person.id}`} ariaLabel={`Role for ${person.name}`} value={person.role} onChange={(role) => onRoleChange(person.id, role)} /><button className="secondary-button team-delete-button" type="button" onClick={() => onDelete(person)} aria-label={`Delete ${person.name}`} title="Delete staff account"><X size={14} /> Delete</button></div>)}</section></>;
 }
 
-function PendingApprovalRow({ person, onApprove }) {
+function PendingApprovalRow({ person, onApprove, onDeny }) {
   const [role, setRole] = useState('call-agent');
-  return <div className="approval-row"><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><RoleSelect id={`role-${person.id}`} ariaLabel={`Choose role for ${person.name}`} value={role} onChange={setRole} /><button className="primary-button" type="button" onClick={() => onApprove(person.id, role)}><Check size={14} /> Approve</button></div>;
+  return <div className="approval-row"><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><RoleSelect id={`role-${person.id}`} ariaLabel={`Choose role for ${person.name}`} value={role} onChange={setRole} /><button className="primary-button" type="button" onClick={() => onApprove(person.id, role)}><Check size={14} /> Approve</button><button className="secondary-button team-deny-button" type="button" onClick={() => onDeny(person)} aria-label={`Deny signup request for ${person.name}`}><X size={14} /> Deny</button></div>;
 }
 
 function ContactGenerator({ user, shift, elapsed, onClockIn, onClockOut, onSave }) {

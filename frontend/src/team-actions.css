@@ -1,0 +1,43 @@
+.simple-team-panel {
+  margin-bottom: 14px;
+  padding: 20px 22px;
+}
+
+.approval-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 0;
+  border-bottom: 1px solid #e7e8df;
+}
+
+.approval-row:last-child {
+  border-bottom: 0;
+}
+
+.team-deny-button,
+.team-delete-button {
+  border-color: #f0c8bd;
+  background: #fff7f4;
+  color: #a44733;
+}
+
+.team-deny-button:hover,
+.team-delete-button:hover {
+  background: #ffede7;
+}
+
+@media (max-width: 700px) {
+  .approval-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .approval-row .team-person {
+    grid-column: 1 / -1;
+  }
+
+  .simple-team-panel {
+    padding: 17px;
+  }
+}

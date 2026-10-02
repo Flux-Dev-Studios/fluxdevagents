@@ -116,12 +116,28 @@ app.patch('/api/team/:id/approval', requireUser, requireAdmin, asyncRoute(async 
   if (!rows[0]) return res.status(404).json({ error: 'Staff account not found.' });
   return res.json({ staff: rows[0] });
 }));
+app.delete('/api/team/:id/approval', requireUser, requireAdmin, asyncRoute(async (req, res) => {
+  const { rows } = await pool.query(
+    `DELETE FROM staff_users WHERE id = $1 AND approved = FALSE AND role <> 'admin' RETURNING id`,
+    [req.params.id],
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Pending signup request not found.' });
+  return res.status(204).end();
+}));
 app.patch('/api/team/:id/role', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   const role = String(req.body.role || '');
   if (!validRole(role)) return res.status(400).json({ error: 'Choose Call agent or Lead agent.' });
   const { rows } = await pool.query(`UPDATE staff_users SET role = $2 WHERE id = $1 AND approved = TRUE AND role <> 'admin' RETURNING id`, [req.params.id, role]);
   if (!rows[0]) return res.status(404).json({ error: 'Approved staff account not found.' });
   return res.json({ status: 'updated' });
+}));
+app.delete('/api/team/:id', requireUser, requireAdmin, asyncRoute(async (req, res) => {
+  const { rows } = await pool.query(
+    `DELETE FROM staff_users WHERE id = $1 AND role <> 'admin' RETURNING id`,
+    [req.params.id],
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Staff account not found.' });
+  return res.status(204).end();
 }));
 
 app.post('/api/contacts/batch', requireUser, requireRole('contact-generator'), asyncRoute(async (req, res) => {
