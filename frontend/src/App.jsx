@@ -68,6 +68,8 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
+  const sidebarRef = useRef(null);
+  const menuToggleRef = useRef(null);
   const [authReady, setAuthReady] = useState(false);
   const [apiError, setApiError] = useState('');
 
@@ -88,6 +90,14 @@ export default function App() {
   }, []);
   useEffect(() => { const interval = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(interval); }, []);
   useEffect(() => { if (!toast) return undefined; const timeout = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timeout); }, [toast]);
+  useEffect(() => {
+    if (!mobileNav) return undefined;
+    const closeOnOutsidePointer = (event) => {
+      if (!sidebarRef.current?.contains(event.target) && !menuToggleRef.current?.contains(event.target)) setMobileNav(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer);
+  }, [mobileNav]);
 
   const signIn = async (email, password, onAuthenticated) => {
     setApiError('');
@@ -155,7 +165,7 @@ export default function App() {
   if (!authReady) return <LoadingScreen message="Preparing your workspace" />;
   if (!user) return <Login onLogin={signIn} onRegister={register} onClearMessage={() => setApiError('')} serverMessage={apiError} />;
   return <div className="app-shell">
-    <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
+    <aside id="workspace-navigation" className={`sidebar ${mobileNav ? 'open' : ''}`} ref={sidebarRef}>
       <a className="brand" href="#home" onClick={(event) => { event.preventDefault(); setPage(user.role === 'admin' ? 'overview' : user.role === 'contact-generator' ? 'generate' : 'today'); }}><img className="brand-logo brand-logo-dark" src="/flux-dev-logo.png" alt="Flux Dev" /></a>
       <div className="workspace-label">WORKSPACE</div>
       <nav className="side-nav">
@@ -173,7 +183,7 @@ export default function App() {
       </div>
     </aside>
     <main className="main-area">
-      <header className="topbar"><button className="icon-button menu-toggle" onClick={() => setMobileNav(!mobileNav)} aria-label="Open navigation"><Menu size={19} /></button><div className="breadcrumbs">{user.role === 'admin' ? 'Workspace / ' : 'My workspace / '}<b>{activePage === 'today' ? 'Today’s queue' : activePage === 'calls' ? 'Today’s calls' : activePage === 'team' ? 'Team & approvals' : activePage === 'generate' ? 'Find contacts' : 'Overview'}</b></div><div className="topbar-right"><span className="top-date"><CalendarDays size={15} />{formatShortDate()}</span><span className="top-divider" /><span className="top-status"><i /> All systems normal</span><Avatar person={user} size="small" /></div></header>
+      <header className="topbar"><button className="icon-button menu-toggle" ref={menuToggleRef} onClick={() => setMobileNav((isOpen) => !isOpen)} aria-label={mobileNav ? 'Close navigation' : 'Open navigation'} aria-expanded={mobileNav} aria-controls="workspace-navigation">{mobileNav ? <X size={19} /> : <Menu size={19} />}</button><div className="breadcrumbs">{user.role === 'admin' ? 'Workspace / ' : 'My workspace / '}<b>{activePage === 'today' ? 'Today’s queue' : activePage === 'calls' ? 'Today’s calls' : activePage === 'team' ? 'Team & approvals' : activePage === 'generate' ? 'Find contacts' : 'Overview'}</b></div><div className="topbar-right"><span className="top-date"><CalendarDays size={15} />{formatShortDate()}</span><span className="top-divider" /><span className="top-status"><i /> All systems normal</span><Avatar person={user} size="small" /></div></header>
       <div className="page-content">
         {user.role === 'call-agent' && activePage === 'today' && <StaffToday user={user} leads={staffLeads} shift={activeShift} elapsed={elapsed} onClockIn={clockIn} onClockOut={clockOut} onUpdate={updateLead} now={now} />}
         {user.role === 'admin' && activePage === 'overview' && <AdminOverview leads={dailyCalls} shifts={shifts} now={now} onNavigate={setPage} staff={staff.filter((person) => person.approved)} />}
