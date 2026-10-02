@@ -24,48 +24,173 @@ body {
 }
 
 .api-loading {
+  position: relative;
   min-height: 100vh;
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  gap: 22px;
-  padding: 24px;
-  color: #f5f8fb;
-  background: linear-gradient(135deg, #102d4a, #173b62 58%, #1b4b73);
-}
-
-.api-loading img {
-  display: block;
-  width: min(180px, 48vw);
-  height: min(150px, 40vw);
-  object-fit: contain;
-  animation: loading-arrive 420ms ease-out both;
-}
-
-.api-loading b {
-  font-family: var(--display);
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.api-loading-track {
-  width: min(220px, 66vw);
-  height: 3px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 16px;
+  padding: 24px 16px;
   overflow: hidden;
-  background: #ffffff35;
+  color: #f5f8fb;
+  background-color: #0c1f33;
+  background-image: linear-gradient(#9dc4e00b 1px, transparent 1px), linear-gradient(90deg, #9dc4e00b 1px, transparent 1px), linear-gradient(145deg, #0c1f33, #173b62 72%, #102d4a);
+  background-size: 32px 32px, 32px 32px, auto;
 }
 
-.api-loading-track i {
+.loading-console {
+  width: min(100%, 440px);
+  padding: 23px 24px 17px;
+  border: 1px solid #83a7c34a;
+  border-radius: 8px;
+  background: #102942ed;
+  box-shadow: 0 24px 70px #06132170, inset 0 1px #ffffff0b;
+  animation: loading-arrive 360ms ease-out both;
+}
+
+.loading-console-head,
+.loading-console-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.loading-console-head img {
   display: block;
-  width: 42%;
+  width: 112px;
+  height: 42px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.loading-console-label,
+.loading-console-foot,
+.loading-console-caption {
+  color: #a9c0d5;
+  font: 9px var(--mono);
+  letter-spacing: .5px;
+}
+
+.loading-console-label i,
+.loading-console-caption i {
+  color: #44c3e8;
+  font-style: normal;
+}
+
+.loading-console-rule {
+  height: 1px;
+  margin: 14px 0 19px;
+  background: #ffffff1c;
+}
+
+.loading-console-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 82px;
+}
+
+.loading-indicator {
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #42b8db66;
+  border-radius: 50%;
+  background: #38bdf814;
+}
+
+.loading-indicator i {
+  width: 19px;
+  height: 19px;
+  border: 2px solid #6bb0cb55;
+  border-top-color: #38bdf8;
+  border-radius: 50%;
+  animation: loading-spin 900ms linear infinite;
+}
+
+.loading-copy {
+  min-width: 0;
+}
+
+.loading-phase {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #57c9e7;
+  font: 9px var(--mono);
+  letter-spacing: .5px;
+}
+
+.loading-phase i,
+.loading-console-foot i {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: #46d4b0;
+  box-shadow: 0 0 9px #46d4b077;
+}
+
+.loading-copy h1 {
+  margin: 7px 0 3px;
+  color: #f4f8fb;
+  font: 650 17px/1.3 var(--display);
+}
+
+.loading-copy p {
+  margin: 0;
+  color: #afc1d1;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.loading-console-track {
+  height: 3px;
+  margin: 19px 0 14px;
+  overflow: hidden;
+  background: #d4e9f41f;
+}
+
+.loading-console-track i {
+  display: block;
+  width: 36%;
   height: 100%;
   background: #38bdf8;
   animation: loading-sweep 1.2s ease-in-out infinite;
 }
 
+.loading-console-foot {
+  gap: 8px;
+}
+
+.loading-console-foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.loading-console-foot i {
+  width: 5px;
+  height: 5px;
+  flex-basis: 5px;
+}
+
+.loading-console-caption {
+  color: #9ab2c7a6;
+  font-size: 8px;
+}
+
 @keyframes loading-arrive {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes loading-spin {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes loading-sweep {
@@ -74,9 +199,33 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .api-loading img,
-  .api-loading-track i {
+  .loading-console,
+  .loading-indicator i,
+  .loading-console-track i {
     animation: none;
+  }
+}
+
+@media (max-width: 380px) {
+  .loading-console {
+    padding: 18px 16px 14px;
+  }
+
+  .loading-console-head img {
+    width: 96px;
+  }
+
+  .loading-console-label,
+  .loading-console-foot {
+    font-size: 8px;
+  }
+
+  .loading-console-main {
+    gap: 12px;
+  }
+
+  .loading-copy h1 {
+    font-size: 15px;
   }
 }
 

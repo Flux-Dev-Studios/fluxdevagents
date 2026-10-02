@@ -42,8 +42,20 @@ function StatusPill({ status }) {
   const labels = { pending: 'Not called', interested: 'Interested', 'no-answer': 'No answer', 'not-interested': 'Not interested' };
   return <span className={`status-pill ${status}`}><i />{labels[status] || status}</span>;
 }
-function LoadingScreen({ message }) {
-  return <main className="api-loading" role="status" aria-live="polite" aria-busy="true"><img src="/flux-dev-logo.png" alt="Flux Dev" /><b>{message}</b><span className="api-loading-track" aria-hidden="true"><i /></span></main>;
+function LoadingScreen({ message, authenticated = false }) {
+  return <main className="api-loading" role="status" aria-live="polite" aria-busy="true">
+    <section className="loading-console">
+      <header className="loading-console-head"><img src="/flux-dev-logo.png" alt="Flux Dev" /><span className="loading-console-label">AUTH PIPELINE <i>v1.0</i></span></header>
+      <div className="loading-console-rule" />
+      <div className="loading-console-main">
+        <span className="loading-indicator" aria-hidden="true"><i /></span>
+        <div className="loading-copy"><span className="loading-phase"><i />{authenticated ? 'IDENTITY VERIFIED' : 'SESSION CHECK'}</span><h1>{message}</h1><p>{authenticated ? 'Retrieving your workspace data' : 'Confirming your saved session'}</p></div>
+      </div>
+      <div className="loading-console-track" aria-hidden="true"><i /></div>
+      <footer className="loading-console-foot"><span><i /> AUTH</span><span><i /> DATABASE</span><span><i /> WORKSPACE</span></footer>
+    </section>
+    <span className="loading-console-caption">FLUX DEV <i>/</i> SECURE WORKSPACE</span>
+  </main>;
 }
 
 export default function App() {
@@ -77,16 +89,19 @@ export default function App() {
   useEffect(() => { const interval = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(interval); }, []);
   useEffect(() => { if (!toast) return undefined; const timeout = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timeout); }, [toast]);
 
-  const signIn = async (email, password) => {
+  const signIn = async (email, password, onAuthenticated) => {
     try {
       const { user: activeUser } = await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+      onAuthenticated();
       await loadWorkspace(activeUser);
       setApiError('');
-      return 'success';
+      return { status: 'success' };
     } catch (error) {
-      if (error.code === 'pending') return 'pending';
-      setApiError(error.message === 'Email or password was not recognized.' ? error.message : 'Unable to sign in right now. Please try again shortly.');
-      return 'invalid';
+      const message = error.code === 'pending' || error.message === 'Email or password was not recognized.'
+        ? error.message
+        : 'Unable to sign in right now. Please try again shortly.';
+      setApiError(message);
+      return { status: 'invalid', message };
     }
   };
   const register = async (name, email, password, role) => {
@@ -234,6 +249,7 @@ function Login({ onLogin, onRegister, serverMessage }) {
   const [role, setRole] = useState('call-agent');
   const [message, setMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const submit = async (event) => {
     event.preventDefault();
     setMessage('');
@@ -244,14 +260,17 @@ function Login({ onLogin, onRegister, serverMessage }) {
         setMessage(result === 'success' ? 'Request sent. An admin must approve your account before you can sign in.' : serverMessage || 'That email is already registered, or the details are incomplete.');
         return;
       }
-      const result = await onLogin(email, password);
-      setMessage(result === 'pending' ? 'Your account is waiting for admin approval.' : result === 'invalid' ? serverMessage || 'That email and password combination was not recognized.' : '');
+      const result = await onLogin(email, password, () => setIsAuthenticated(true));
+      if (result.status !== 'success') {
+        setIsAuthenticated(false);
+        setMessage(result.message);
+      }
     } finally {
       setIsSubmitting(false);
     }
   };
   const toggleMode = () => { setMode(mode === 'login' ? 'signup' : 'login'); setMessage(''); };
-  if (isSubmitting) return <LoadingScreen message={mode === 'login' ? 'Signing you in' : 'Submitting your request'} />;
+  if (isAuthenticated) return <LoadingScreen message="Preparing your workspace" authenticated />;
   return <main className="login-screen">
     <section className="login-art">
       <div className="login-art-top"><a className="brand brand-inverse" href="/"><img className="brand-logo" src="/flux-dev-logo.png" alt="Flux Dev" /></a><span className="edition">STAFF PORTAL <i /> 2026</span></div>
@@ -267,8 +286,8 @@ function Login({ onLogin, onRegister, serverMessage }) {
       <label htmlFor="email">Work email</label><div className="input-wrap"><span className="input-at">@</span><input id="email" type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required /></div>
       <label htmlFor="password">Password</label><div className="input-wrap"><input id="password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} /><button type="button" className="show-password" onClick={() => { const input = document.getElementById('password'); input.type = input.type === 'password' ? 'text' : 'password'; }}>Show</button></div>
       {(message || serverMessage) && <p className="login-message" role="status">{message || serverMessage}</p>}
-      {mode === 'login' ? <button type="submit" className="primary-button login-submit">Sign in <ArrowRight size={16} /></button> : <button type="submit" className="primary-button login-submit">Request access <ArrowRight size={16} /></button>}
-      <button type="button" className="login-mode-toggle" onClick={toggleMode}>{mode === 'login' ? 'New to the team? Request an account' : 'Already approved? Sign in'}</button>
+      {mode === 'login' ? <button type="submit" className="primary-button login-submit" disabled={isSubmitting}>{isSubmitting ? 'Checking account…' : 'Sign in'} {!isSubmitting && <ArrowRight size={16} />}</button> : <button type="submit" className="primary-button login-submit" disabled={isSubmitting}>{isSubmitting ? 'Sending request…' : 'Request access'} {!isSubmitting && <ArrowRight size={16} />}</button>}
+      <button type="button" className="login-mode-toggle" onClick={toggleMode} disabled={isSubmitting}>{mode === 'login' ? 'New to the team? Request an account' : 'Already approved? Sign in'}</button>
       <div className="login-legal">New accounts remain locked until an admin approves them.<br /><b>Flux Dev staff portal</b></div>
     </form></section>
   </main>;
