@@ -38,18 +38,15 @@ npm run dev
 
 Open the local URL printed by Vite. The Vite development server proxies `/api` requests to the Express API on port 3001. Build check: `npm run build`.
 
-## Deploy to Vercel
+## Deploy the frontend to Vercel with the API on Render
 
-Set the Vercel project root to the repository root, with build command `npm run build` and output directory `dist`. The `api/[...path].js` function routes `/api/*` requests to the Express API on the same domain.
+Set the Vercel project root to the repository root, build command to `npm run build`, and output directory to `dist`. The `api/[...path].js` function forwards `/api/*` requests to the Render API, keeping browser requests same-origin so the session cookie works without cross-origin CORS settings.
 
-Use a hosted PostgreSQL database; Vercel cannot connect to a PostgreSQL server running on your computer. Add these variables in Vercel Project Settings for each deployment environment:
+Set `RENDER_API_URL` in Vercel Project Settings for Production, Preview, and Development to the Render Web Service base URL, for example `https://your-api.onrender.com` (no `/api` suffix). Vercel does not need `DATABASE_URL` or `JWT_SECRET` for this setup.
 
-- `DATABASE_URL`: the hosted PostgreSQL connection string.
-- `PGSSL`: set to `true` when the provider requires SSL.
-- `JWT_SECRET`: a unique random secret of at least 32 characters.
-- `PGPOOL_MAX`: optional; defaults to `1` on Vercel to limit connections per function instance.
+On Render, run the Web Service with `npm run api`. Set `NODE_ENV=production`, the Render Postgres internal `DATABASE_URL`, and a stable `JWT_SECRET` of at least 32 characters. Set `PGSSL=true` if required by your database provider. Do not set `SERVE_FRONTEND=true`; Vercel serves the frontend. Set the Render health check path to `/api/health`.
 
-Initialize the hosted database once by running `npm run db:setup` with `DATABASE_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, and an `ADMIN_PASSWORD` of at least 12 characters configured locally. The database role must be allowed to create the database, as the setup script creates it if missing. Do not add these secrets to the repository.
+Initialize the Render database once using its external connection URL from your computer. Set `DB_CREATE_IF_MISSING=false` for that run, plus `JWT_SECRET`, `ADMIN_EMAIL`, and an `ADMIN_PASSWORD` of at least 12 characters, then run `npm run db:setup`. Never commit `.env` or database credentials.
 
 ## Deploy the full app to Render
 

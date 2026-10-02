@@ -19,21 +19,34 @@ export function clearSession(res) {
 }
 
 export async function requireUser(req, res, next) {
+  const token = req.cookies[cookieName];
+  if (!token) return res.status(401).json({ error: 'Sign in required.' });
+
+  let payload;
   try {
-    const token = req.cookies[cookieName];
-    if (!token) return res.status(401).json({ error: 'Sign in required.' });
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    const { rows } = await req.db.query(
-      'SELECT id, full_name, email, role, approved FROM staff_users WHERE id = $1',
-      [payload.sub],
-    );
-    const user = rows[0];
-    if (!user || !user.approved) return res.status(401).json({ error: 'Account is unavailable.' });
-    req.user = user;
-    return next();
+    payload = jwt.verify(token, process.env.JWT_SECRET);
   } catch {
+    clearSession(res);
     return res.status(401).json({ error: 'Session expired. Sign in again.' });
   }
+
+  let rows;
+  try {
+    ({ rows } = await req.db.query(
+      'SELECT id, full_name, email, role, approved FROM staff_users WHERE id = $1',
+      [payload.sub],
+    ));
+  } catch (error) {
+    return next(error);
+  }
+
+  const user = rows[0];
+  if (!user || !user.approved) {
+    clearSession(res);
+    return res.status(401).json({ error: 'Account is unavailable.' });
+  }
+  req.user = user;
+  return next();
 }
 
 export function requireAdmin(req, res, next) {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   Activity, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUpRight, BadgeCheck,
   BriefcaseBusiness, CalendarDays, Check, CheckCheck, ChevronDown, CircleHelp,
-  Clock3, FilePlus2, Filter, LayoutDashboard, LogOut, Menu, MoreHorizontal,
+  Clock3, FilePlus2, Filter, LayoutDashboard, LogOut, MoreHorizontal,
   ArrowDown, ArrowUp, MapPin, Phone, Plus, Search, Settings2, ShieldCheck, Timer, Users, X,
 } from 'lucide-react';
 
@@ -22,6 +22,7 @@ const apiRequest = async (path, options = {}) => {
   if (!response.ok) {
     const error = new Error(payload?.error || 'The server could not complete that request.');
     error.code = payload?.code;
+    error.status = response.status;
     throw error;
   }
   return payload;
@@ -84,9 +85,17 @@ export default function App() {
   };
 
   useEffect(() => {
+    let sessionRestored = false;
     apiRequest('/auth/session').then(async ({ user: activeUser }) => {
+      sessionRestored = true;
+      setUser(activeUser);
+      setPage(activeUser.role === 'admin' ? 'overview' : activeUser.role === 'contact-generator' ? 'generate' : 'today');
       await loadWorkspace(activeUser);
-    }).catch((error) => { if (error.message !== 'Sign in required.') setApiError('Unable to connect right now. Please try again shortly.'); }).finally(() => setAuthReady(true));
+    }).catch((error) => {
+      if (error.status === 401) return;
+      if (sessionRestored) setToast('Workspace data could not be refreshed. Reload to try again.');
+      else setApiError('Unable to connect right now. Please try again shortly.');
+    }).finally(() => setAuthReady(true));
   }, []);
   useEffect(() => { const interval = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(interval); }, []);
   useEffect(() => { if (!toast) return undefined; const timeout = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timeout); }, [toast]);
@@ -139,7 +148,7 @@ export default function App() {
       setToast('Staff role updated.');
     } catch (error) { setToast(error.message); }
   };
-  const signOut = async () => { await apiRequest('/auth/logout', { method: 'POST' }).catch(() => {}); setUser(null); setStaff([]); setLeads([]); setContactPool([]); setShifts({}); setMobileNav(false); };
+  const signOut = async () => { await apiRequest('/auth/logout', { method: 'POST' }).catch(() => {}); setUser(null); setStaff([]); setLeads([]); setContactPool([]); setShifts({}); setMobileNav(false); setApiError(''); };
   const activeShift = user && user.role !== 'admin' ? shifts[user.id] : null;
   const elapsed = activeShift ? activeShift.elapsed + (activeShift.startedAt ? Math.max(0, Math.floor((now - new Date(activeShift.startedAt).getTime()) / 1000)) : 0) : 0;
   const clockIn = async () => {
@@ -166,7 +175,7 @@ export default function App() {
   if (!user) return <Login onLogin={signIn} onRegister={register} onClearMessage={() => setApiError('')} serverMessage={apiError} />;
   return <div className="app-shell">
     <aside id="workspace-navigation" className={`sidebar ${mobileNav ? 'open' : ''}`} ref={sidebarRef}>
-      <a className="brand" href="#home" onClick={(event) => { event.preventDefault(); setPage(user.role === 'admin' ? 'overview' : user.role === 'contact-generator' ? 'generate' : 'today'); }}><img className="brand-logo brand-logo-dark" src="/flux-dev-logo.png" alt="Flux Dev" /></a>
+      <a className="brand" href="#home" onClick={(event) => { event.preventDefault(); if (window.matchMedia('(max-width: 820px)').matches) setMobileNav(false); else setPage(user.role === 'admin' ? 'overview' : user.role === 'contact-generator' ? 'generate' : 'today'); }}><img className="brand-logo brand-logo-dark" src="/flux-dev-logo.png" alt="Flux Dev" /></a>
       <div className="workspace-label">WORKSPACE</div>
       <nav className="side-nav">
         {user.role === 'admin' ? <>
@@ -183,7 +192,7 @@ export default function App() {
       </div>
     </aside>
     <main className="main-area">
-      <header className="topbar"><button className="icon-button menu-toggle" ref={menuToggleRef} onClick={() => setMobileNav((isOpen) => !isOpen)} aria-label={mobileNav ? 'Close navigation' : 'Open navigation'} aria-expanded={mobileNav} aria-controls="workspace-navigation">{mobileNav ? <X size={19} /> : <Menu size={19} />}</button><div className="breadcrumbs">{user.role === 'admin' ? 'Workspace / ' : 'My workspace / '}<b>{activePage === 'today' ? 'Today’s queue' : activePage === 'calls' ? 'Today’s calls' : activePage === 'team' ? 'Team & approvals' : activePage === 'generate' ? 'Find contacts' : 'Overview'}</b></div><div className="topbar-right"><span className="top-date"><CalendarDays size={15} />{formatShortDate()}</span><span className="top-divider" /><span className="top-status"><i /> All systems normal</span><Avatar person={user} size="small" /></div></header>
+      <header className="topbar"><button className="icon-button menu-toggle" ref={menuToggleRef} onClick={() => setMobileNav((isOpen) => !isOpen)} aria-label={mobileNav ? 'Close navigation' : 'Open navigation'} title={mobileNav ? 'Close navigation' : 'Open navigation'} aria-expanded={mobileNav} aria-controls="workspace-navigation"><img src="/flux-dev-logo.png" alt="" width="22" height="22" /></button><div className="breadcrumbs">{user.role === 'admin' ? 'Workspace / ' : 'My workspace / '}<b>{activePage === 'today' ? 'Today’s queue' : activePage === 'calls' ? 'Today’s calls' : activePage === 'team' ? 'Team & approvals' : activePage === 'generate' ? 'Find contacts' : 'Overview'}</b></div><div className="topbar-right"><span className="top-date"><CalendarDays size={15} />{formatShortDate()}</span><span className="top-divider" /><span className="top-status"><i /> All systems normal</span><Avatar person={user} size="small" /></div></header>
       <div className="page-content">
         {user.role === 'call-agent' && activePage === 'today' && <StaffToday user={user} leads={staffLeads} shift={activeShift} elapsed={elapsed} onClockIn={clockIn} onClockOut={clockOut} onUpdate={updateLead} now={now} />}
         {user.role === 'admin' && activePage === 'overview' && <AdminOverview leads={dailyCalls} shifts={shifts} now={now} onNavigate={setPage} staff={staff.filter((person) => person.approved)} />}
@@ -287,7 +296,7 @@ function Login({ onLogin, onRegister, onClearMessage, serverMessage }) {
     <section className="login-art">
       <div className="login-art-top"><a className="brand brand-inverse" href="/"><img className="brand-logo" src="/flux-dev-logo.png" alt="Flux Dev" /></a><span className="edition">STAFF PORTAL <i /> 2026</span></div>
       <div className="art-copy"><span className="eyebrow"><span /> GOOD WORK STARTS HERE</span><h1>Make the<br />first call <em>count.</em></h1><p>Your day, your queue, your next good conversation. Everything you need to keep momentum.</p><div className="art-stat"><div className="stat-avatars"><span>MC</span><span>NW</span><span>EO</span><b>+</b></div><span>Small team. Real results.</span></div></div>
-      <div className="art-footer"><span>BUILDING THE WEB, ONE HELLO AT A TIME.</span><span>OAKLAND, CA <ArrowUpRight size={14} /></span></div><div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" /><div className="art-coordinate">37°48' N / 122°16' W</div>
+      <div className="art-footer"><span>BUILDING THE WEB, ONE HELLO AT A TIME.</span></div><div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" />
     </section>
     <section className="login-panel"><form className="login-form" onSubmit={submit}>
       <span className="form-kicker">{mode === 'login' ? 'WELCOME BACK' : 'REQUEST ACCESS'}</span>
