@@ -35,6 +35,7 @@ const formatDuration = (seconds) => {
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 };
 const formatShortDate = (date = new Date()) => new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).format(date);
+const formatClockTime = (date) => new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(date));
 const initials = (name) => name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase();
 
 function Avatar({ person, size = '' }) {
@@ -159,6 +160,7 @@ export default function App() {
     catch (error) { setToast(error.message); }
   };
   const clockOut = async () => {
+    if (!window.confirm('Clock out now? Your shift time will be saved.')) return;
     try { const { shift } = await apiRequest('/shifts/clock-out', { method: 'POST' }); setShifts((existing) => ({ ...existing, [user.id]: shift })); setToast('Shift ended. Today’s time has been saved.'); }
     catch (error) { setToast(error.message); }
   };
@@ -173,6 +175,19 @@ export default function App() {
   const activePage = user?.role === 'admin'
     ? ['overview', 'calls', 'team'].includes(page) ? page : 'overview'
     : user?.role === 'contact-generator' ? 'generate' : 'today';
+
+  useEffect(() => {
+    if (user?.role !== 'admin' || activePage !== 'overview') return undefined;
+    let isCurrent = true;
+    const refreshShifts = () => {
+      apiRequest('/shifts/today').then(({ shifts: latestShifts }) => {
+        if (isCurrent) setShifts(Object.fromEntries(latestShifts.map((shift) => [shift.staffId, shift])));
+      }).catch(() => {});
+    };
+    refreshShifts();
+    const interval = window.setInterval(refreshShifts, 15_000);
+    return () => { isCurrent = false; window.clearInterval(interval); };
+  }, [activePage, user?.role]);
 
   if (!authReady) return <LoadingScreen message="Preparing your workspace" />;
   if (!user) return <Login onLogin={signIn} onRegister={register} onClearMessage={() => setApiError('')} serverMessage={apiError} />;
@@ -374,11 +389,12 @@ function AdminOverview({ leads, shifts, now, onNavigate, staff, contacts = [], c
             const awaitingReview = contacts.filter((contact) => contact.generatorId === person.id).length;
             const shift = shifts[person.id];
             const seconds = shift ? shift.elapsed + (shift.startedAt ? Math.floor((now - new Date(shift.startedAt).getTime()) / 1000) : 0) : 0;
+            const shiftStatus = shift?.startedAt ? 'On shift' : shift?.signedOutAt ? `Out ${formatClockTime(shift.signedOutAt)}` : 'Not clocked in';
             return <div className="team-table-row" key={person.id}>
               <div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{isLeadAgent ? 'Lead agent' : 'Call agent'}</small></span></div>
               <span className="table-number">{isLeadAgent ? submitted : touched}<small>{isLeadAgent ? ' leads' : ` / ${assigned.length}`}</small></span>
               <span className={`table-number ${isLeadAgent ? '' : 'positive-number'}`}>{isLeadAgent ? awaitingReview : yes}<small>{isLeadAgent ? ' review' : ' interested'}</small></span>
-              <span className="table-time">{formatDuration(seconds)}</span>
+              <span className="table-time">{formatDuration(seconds)}<small>{shiftStatus}</small></span>
             </div>;
           })}
         </div>

@@ -1,8 +1,46 @@
+@media (max-width: 1020px) and (min-width: 621px) {
+  .staff-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 620px) {
+  .staff-overview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .clock-panel {
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 14px;
+  }
+
+  .clock-panel-copy {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .clock-button {
+    align-self: flex-start;
+  }
+}
+
 .assignment-panel,
 .distribution-panel {
   max-width: 780px;
   padding: 18px;
   margin-bottom: 12px;
+}
+
+.table-time {
+  display: grid;
+  gap: 3px;
+}
+
+.table-time small {
+  color: var(--muted);
+  font: 8px var(--mono);
 }
 
 :root {

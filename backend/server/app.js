@@ -102,6 +102,13 @@ app.get('/api/team/pending', requireUser, requireAdmin, asyncRoute(async (_req, 
   const { rows } = await pool.query(`SELECT id, full_name AS name, email, role, approved FROM staff_users WHERE role <> 'admin' ORDER BY approved, created_at`);
   res.json({ staff: rows });
 }));
+app.get('/api/shifts/today', requireUser, requireAdmin, asyncRoute(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT staff_id AS "staffId", elapsed_seconds AS elapsed, clocked_in_at AS "startedAt", signed_out_at AS "signedOutAt"
+     FROM daily_shifts WHERE work_date = CURRENT_DATE`,
+  );
+  res.json({ shifts: rows });
+}));
 app.patch('/api/team/:id/approval', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   const role = String(req.body.role || '');
   if (!validRole(role)) return res.status(400).json({ error: 'Choose Call agent or Lead agent.' });
