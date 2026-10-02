@@ -42,6 +42,9 @@ function StatusPill({ status }) {
   const labels = { pending: 'Not called', interested: 'Interested', 'no-answer': 'No answer', 'not-interested': 'Not interested' };
   return <span className={`status-pill ${status}`}><i />{labels[status] || status}</span>;
 }
+function LoadingScreen({ message }) {
+  return <main className="api-loading" role="status" aria-live="polite" aria-busy="true"><img src="/flux-dev-logo.png" alt="Flux Dev" /><b>{message}</b><span className="api-loading-track" aria-hidden="true"><i /></span></main>;
+}
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -132,7 +135,7 @@ export default function App() {
     ? ['overview', 'calls', 'team'].includes(page) ? page : 'overview'
     : user?.role === 'contact-generator' ? 'generate' : 'today';
 
-  if (!authReady) return <main className="api-loading" role="status" aria-live="polite" aria-busy="true"><img src="/flux-dev-logo.png" alt="Flux Dev" /><b>Preparing your workspace</b><span className="api-loading-track" aria-hidden="true"><i /></span></main>;
+  if (!authReady) return <LoadingScreen message="Preparing your workspace" />;
   if (!user) return <Login onLogin={signIn} onRegister={register} serverMessage={apiError} />;
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
@@ -230,17 +233,25 @@ function Login({ onLogin, onRegister, serverMessage }) {
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('call-agent');
   const [message, setMessage] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const submit = async (event) => {
     event.preventDefault();
-    if (mode === 'signup') {
-      const result = await onRegister(name, email, password, role);
-      setMessage(result === 'success' ? 'Request sent. An admin must approve your account before you can sign in.' : serverMessage || 'That email is already registered, or the details are incomplete.');
-      return;
+    setMessage('');
+    setIsSubmitting(true);
+    try {
+      if (mode === 'signup') {
+        const result = await onRegister(name, email, password, role);
+        setMessage(result === 'success' ? 'Request sent. An admin must approve your account before you can sign in.' : serverMessage || 'That email is already registered, or the details are incomplete.');
+        return;
+      }
+      const result = await onLogin(email, password);
+      setMessage(result === 'pending' ? 'Your account is waiting for admin approval.' : result === 'invalid' ? serverMessage || 'That email and password combination was not recognized.' : '');
+    } finally {
+      setIsSubmitting(false);
     }
-    const result = await onLogin(email, password);
-    setMessage(result === 'pending' ? 'Your account is waiting for admin approval.' : result === 'invalid' ? serverMessage || 'That email and password combination was not recognized.' : '');
   };
   const toggleMode = () => { setMode(mode === 'login' ? 'signup' : 'login'); setMessage(''); };
+  if (isSubmitting) return <LoadingScreen message={mode === 'login' ? 'Signing you in' : 'Submitting your request'} />;
   return <main className="login-screen">
     <section className="login-art">
       <div className="login-art-top"><a className="brand brand-inverse" href="/"><img className="brand-logo" src="/flux-dev-logo.png" alt="Flux Dev" /></a><span className="edition">STAFF PORTAL <i /> 2026</span></div>
