@@ -90,6 +90,7 @@ export default function App() {
   useEffect(() => { if (!toast) return undefined; const timeout = window.setTimeout(() => setToast(''), 2600); return () => window.clearTimeout(timeout); }, [toast]);
 
   const signIn = async (email, password, onAuthenticated) => {
+    setApiError('');
     try {
       const { user: activeUser } = await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
       onAuthenticated();
@@ -105,12 +106,13 @@ export default function App() {
     }
   };
   const register = async (name, email, password, role) => {
+    setApiError('');
     try {
       await apiRequest('/auth/register', { method: 'POST', body: JSON.stringify({ name, email, password, role }) });
-      return 'success';
+      return { status: 'success' };
     } catch (error) {
       setApiError(error.message);
-      return false;
+      return { status: 'error', message: error.message };
     }
   };
   const approveStaff = async (id, role) => {
@@ -151,7 +153,7 @@ export default function App() {
     : user?.role === 'contact-generator' ? 'generate' : 'today';
 
   if (!authReady) return <LoadingScreen message="Preparing your workspace" />;
-  if (!user) return <Login onLogin={signIn} onRegister={register} serverMessage={apiError} />;
+  if (!user) return <Login onLogin={signIn} onRegister={register} onClearMessage={() => setApiError('')} serverMessage={apiError} />;
   return <div className="app-shell">
     <aside className={`sidebar ${mobileNav ? 'open' : ''}`}>
       <a className="brand" href="#home" onClick={(event) => { event.preventDefault(); setPage(user.role === 'admin' ? 'overview' : user.role === 'contact-generator' ? 'generate' : 'today'); }}><img className="brand-logo brand-logo-dark" src="/flux-dev-logo.png" alt="Flux Dev" /></a>
@@ -241,7 +243,7 @@ function RoleSelect({ id, value, onChange, ariaLabel }) {
   </div>;
 }
 
-function Login({ onLogin, onRegister, serverMessage }) {
+function Login({ onLogin, onRegister, onClearMessage, serverMessage }) {
   const [mode, setMode] = useState('login');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -257,7 +259,7 @@ function Login({ onLogin, onRegister, serverMessage }) {
     try {
       if (mode === 'signup') {
         const result = await onRegister(name, email, password, role);
-        setMessage(result === 'success' ? 'Request sent. An admin must approve your account before you can sign in.' : serverMessage || 'That email is already registered, or the details are incomplete.');
+        setMessage(result.status === 'success' ? 'Request sent. An admin must approve your account before you can sign in.' : result.message || 'That email is already registered, or the details are incomplete.');
         return;
       }
       const result = await onLogin(email, password, () => setIsAuthenticated(true));
@@ -269,7 +271,7 @@ function Login({ onLogin, onRegister, serverMessage }) {
       setIsSubmitting(false);
     }
   };
-  const toggleMode = () => { setMode(mode === 'login' ? 'signup' : 'login'); setMessage(''); };
+  const toggleMode = () => { setMode(mode === 'login' ? 'signup' : 'login'); setMessage(''); onClearMessage(); };
   if (isAuthenticated) return <LoadingScreen message="Preparing your workspace" authenticated />;
   return <main className="login-screen">
     <section className="login-art">
