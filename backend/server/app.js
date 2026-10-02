@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool } from './db.js';
+import { findCallDuplicates } from './duplicates.js';
 import { clearSession, createSession, requireAdmin, requireRole, requireUser } from './middleware.js';
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
@@ -20,6 +21,18 @@ app.use((req, res, next) => { req.db = pool; next(); });
 const publicUser = (user) => ({ id: user.id, name: user.full_name, email: user.email, role: user.role, approved: user.approved });
 const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const validRole = (role) => role === 'call-agent' || role === 'contact-generator';
+const findWorkspaceCallDuplicates = async (client, calls, contactIds = []) => {
+  const [existingCalls, pendingContacts] = await Promise.all([
+    client.query(`SELECT id::text AS id, business_name AS business, phone FROM daily_calls WHERE work_date = CURRENT_DATE`),
+    client.query(`SELECT id::text AS id, business_name AS business, phone FROM generated_contacts WHERE work_date = CURRENT_DATE AND assigned_at IS NULL`),
+  ]);
+  const selectedContactIds = new Set(contactIds.map(String));
+  const existing = [
+    ...existingCalls.rows.map((row) => ({ ...row, source: "today's calls" })),
+    ...pendingContacts.rows.filter((row) => !selectedContactIds.has(row.id)).map((row) => ({ ...row, source: 'pending lead submissions' })),
+  ];
+  return findCallDuplicates(existing, calls);
+};
 
 app.get('/api/health', asyncRoute(async (_req, res) => {
   await pool.query('SELECT 1');
@@ -76,10 +89,13 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
     ? pool.query(`SELECT staff_id AS "staffId", elapsed_seconds AS elapsed, clocked_in_at AS "startedAt", signed_out_at AS "signedOutAt" FROM daily_shifts WHERE work_date = CURRENT_DATE`)
     : pool.query(`SELECT staff_id AS "staffId", elapsed_seconds AS elapsed, clocked_in_at AS "startedAt", signed_out_at AS "signedOutAt" FROM daily_shifts WHERE work_date = CURRENT_DATE AND staff_id = $1`, [req.user.id]);
   const contactsPromise = req.user.role === 'admin'
-    ? pool.query(`SELECT id, business_name AS business, phone, area, category, map_query AS "mapQuery", generator_id AS "generatorId", work_date AS "workDate" FROM generated_contacts WHERE work_date = CURRENT_DATE ORDER BY created_at`)
+    ? pool.query(`SELECT id, business_name AS business, phone, area, category, map_query AS "mapQuery", generator_id AS "generatorId", work_date AS "workDate" FROM generated_contacts WHERE work_date = CURRENT_DATE AND assigned_at IS NULL ORDER BY created_at`)
     : Promise.resolve({ rows: [] });
-  const [calls, staff, shifts, contacts] = await Promise.all([callsPromise, staffPromise, shiftPromise, contactsPromise]);
-  return res.json({ user: publicUser(req.user), calls: calls.rows, staff: staff.rows, shifts: shifts.rows, contacts: contacts.rows });
+  const contactActivityPromise = req.user.role === 'admin'
+    ? pool.query(`SELECT generator_id AS "generatorId", COUNT(*)::int AS submitted FROM generated_contacts WHERE work_date = CURRENT_DATE GROUP BY generator_id`)
+    : Promise.resolve({ rows: [] });
+  const [calls, staff, shifts, contacts, contactActivity] = await Promise.all([callsPromise, staffPromise, shiftPromise, contactsPromise, contactActivityPromise]);
+  return res.json({ user: publicUser(req.user), calls: calls.rows, staff: staff.rows, shifts: shifts.rows, contacts: contacts.rows, contactActivity: contactActivity.rows });
 }));
 
 app.get('/api/team/pending', requireUser, requireAdmin, asyncRoute(async (_req, res) => {
@@ -134,6 +150,13 @@ app.post('/api/calls/assign', requireUser, requireAdmin, asyncRoute(async (req, 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query('LOCK TABLE daily_calls IN SHARE ROW EXCLUSIVE MODE');
+    await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
+    const duplicates = await findWorkspaceCallDuplicates(client, calls, contactIds);
+    if (duplicates.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ code: 'duplicates', error: 'Remove duplicate entries before sharing calls.', duplicates });
+    }
     const agentRows = await client.query(`SELECT id FROM staff_users WHERE approved = TRUE AND role = 'call-agent' ORDER BY created_at, id`);
     if (!agentRows.rows.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Approve at least one Call agent before sharing calls.' }); }
     const countsResult = await client.query(`SELECT staff_id, COUNT(*)::int AS count FROM daily_calls WHERE work_date = CURRENT_DATE GROUP BY staff_id`);
@@ -153,12 +176,20 @@ app.post('/api/calls/assign', requireUser, requireAdmin, asyncRoute(async (req, 
       counts[assigned.id] += 1;
       saved.push(rows[0]);
     }
-    if (contactIds.length) await client.query('DELETE FROM generated_contacts WHERE id = ANY($1::uuid[])', [contactIds]);
+    if (contactIds.length) await client.query('UPDATE generated_contacts SET assigned_at = NOW() WHERE id = ANY($1::uuid[]) AND assigned_at IS NULL', [contactIds]);
     if (!saved.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'No valid calls were submitted.' }); }
     await client.query('COMMIT');
     return res.status(201).json({ calls: saved });
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
+}));
+
+app.post('/api/calls/check-duplicates', requireUser, requireAdmin, asyncRoute(async (req, res) => {
+  const calls = Array.isArray(req.body.calls) ? req.body.calls : [];
+  const contactIds = Array.isArray(req.body.contactIds) ? req.body.contactIds : [];
+  if (calls.length > 1000) return res.status(400).json({ error: 'Review no more than 1000 calls at a time.' });
+  const duplicates = await findWorkspaceCallDuplicates(pool, calls, contactIds);
+  return res.json({ duplicates });
 }));
 
 app.patch('/api/calls/:id', requireUser, requireRole('call-agent'), asyncRoute(async (req, res) => {

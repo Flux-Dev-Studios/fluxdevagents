@@ -491,6 +491,11 @@ body {
   border-bottom: 1px solid #edf1f6;
 }
 
+.review-row.has-duplicate {
+  background: #fff3ee;
+  border-bottom-color: #f0c2b5;
+}
+
 .review-index {
   color: #8d9bad;
   font: 10px var(--mono);
@@ -503,6 +508,36 @@ body {
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.review-duplicate-note {
+  display: block;
+  overflow: visible;
+  color: #a94b39;
+  font-size: 9px;
+  font-weight: 500;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.duplicate-check-warning,
+.duplicate-check-success {
+  margin: 0 0 10px;
+  padding: 9px 11px;
+  border-radius: 5px;
+  font-size: 11px;
+}
+
+.duplicate-check-warning {
+  border: 1px solid #f0c2b5;
+  background: #fff3ee;
+  color: #a94b39;
+}
+
+.duplicate-check-success {
+  border: 1px solid #b8d8c2;
+  background: #edf7ef;
+  color: #347254;
 }
 
 .review-phone {

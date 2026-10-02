@@ -23,6 +23,7 @@ const apiRequest = async (path, options = {}) => {
     const error = new Error(payload?.error || 'The server could not complete that request.');
     error.code = payload?.code;
     error.status = response.status;
+    error.duplicates = payload?.duplicates || [];
     throw error;
   }
   return payload;
@@ -64,6 +65,7 @@ export default function App() {
   const [staff, setStaff] = useState([]);
   const [leads, setLeads] = useState([]);
   const [contactPool, setContactPool] = useState([]);
+  const [contactActivity, setContactActivity] = useState([]);
   const [shifts, setShifts] = useState({});
   const [page, setPage] = useState('overview');
   const [now, setNow] = useState(Date.now());
@@ -80,6 +82,7 @@ export default function App() {
     setStaff(data.staff || []);
                 {STAFF.map((person) => { const assigned = leads.filter((lead) => lead.staffId === person.id); const touched = assigned.filter((lead) => lead.status !== 'pending').length; const yes = assigned.filter((lead) => lead.status === 'interested').length; const shift = shifts[person.id]; const seconds = shift ? shift.elapsed + (shift.startedAt ? Math.floor((now - new Date(shift.startedAt).getTime()) / 1000) : 0) : 0; return <div className="team-table-row" key={person.id}><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><span className="table-number">{touched}<small> / {assigned.length}</small></span><span className="table-number positive-number">{yes}</span><span className="table-time">{formatDuration(seconds)}</span></div>; })}
     setContactPool(data.contacts || []);
+    setContactActivity(data.contactActivity || []);
     setShifts(Object.fromEntries((data.shifts || []).map((shift) => [shift.staffId, shift])));
     setPage((data.user || activeUser).role === 'admin' ? 'overview' : (data.user || activeUser).role === 'contact-generator' ? 'generate' : 'today');
   };
@@ -195,8 +198,8 @@ export default function App() {
       <header className="topbar"><button className="icon-button menu-toggle" ref={menuToggleRef} onClick={() => setMobileNav((isOpen) => !isOpen)} aria-label={mobileNav ? 'Close navigation' : 'Open navigation'} title={mobileNav ? 'Close navigation' : 'Open navigation'} aria-expanded={mobileNav} aria-controls="workspace-navigation"><img src="/flux-dev-logo.png" alt="" width="22" height="22" /></button><div className="breadcrumbs">{user.role === 'admin' ? 'Workspace / ' : 'My workspace / '}<b>{activePage === 'today' ? 'Today’s queue' : activePage === 'calls' ? 'Today’s calls' : activePage === 'team' ? 'Team & approvals' : activePage === 'generate' ? 'Find contacts' : 'Overview'}</b></div><div className="topbar-right"><span className="top-date"><CalendarDays size={15} />{formatShortDate()}</span><span className="top-divider" /><span className="top-status"><i /> All systems normal</span><Avatar person={user} size="small" /></div></header>
       <div className="page-content">
         {user.role === 'call-agent' && activePage === 'today' && <StaffToday user={user} leads={staffLeads} shift={activeShift} elapsed={elapsed} onClockIn={clockIn} onClockOut={clockOut} onUpdate={updateLead} now={now} />}
-        {user.role === 'admin' && activePage === 'overview' && <AdminOverview leads={dailyCalls} shifts={shifts} now={now} onNavigate={setPage} staff={staff.filter((person) => person.approved)} />}
-        {user.role === 'admin' && activePage === 'calls' && <DailyCallsPage leads={dailyCalls} contacts={contactPool} staff={staff.filter((person) => person.approved && person.role === 'call-agent')} onAssign={async (newCalls, contactIds) => { const result = await apiRequest('/calls/assign', { method: 'POST', body: JSON.stringify({ calls: newCalls, contactIds }) }); setLeads((current) => [...current, ...result.calls]); setContactPool((current) => current.filter((contact) => !contactIds.includes(contact.id))); setToast(`${result.calls.length} calls shared across the team.`); }} />}
+        {user.role === 'admin' && activePage === 'overview' && <AdminOverview leads={dailyCalls} shifts={shifts} now={now} onNavigate={setPage} staff={staff.filter((person) => person.approved)} contacts={contactPool} contactActivity={contactActivity} />}
+        {user.role === 'admin' && activePage === 'calls' && <DailyCallsPage leads={dailyCalls} contacts={contactPool} staff={staff.filter((person) => person.approved && person.role === 'call-agent')} onCheckDuplicates={(calls, contactIds) => apiRequest('/calls/check-duplicates', { method: 'POST', body: JSON.stringify({ calls, contactIds }) })} onAssign={async (newCalls, contactIds) => { const result = await apiRequest('/calls/assign', { method: 'POST', body: JSON.stringify({ calls: newCalls, contactIds }) }); setLeads((current) => [...current, ...result.calls]); setContactPool((current) => current.filter((contact) => !contactIds.includes(contact.id))); setToast(`${result.calls.length} calls shared across the team.`); }} />}
         {user.role === 'admin' && activePage === 'team' && <TeamApprovals staff={staff} onApprove={approveStaff} onRoleChange={updateStaffRole} />}
         {user.role === 'contact-generator' && activePage === 'generate' && <ContactGenerator user={user} shift={activeShift} elapsed={elapsed} onClockIn={clockIn} onClockOut={clockOut} onSave={async (contacts) => { const result = await apiRequest('/contacts/batch', { method: 'POST', body: JSON.stringify({ contacts }) }); setToast(`${result.contacts.length} contact${result.contacts.length === 1 ? '' : 's'} saved for admin review.`); }} />}
       </div>
@@ -346,28 +349,84 @@ function StaffActivity({ user, leads, shift, elapsed }) {
   const interested = leads.filter((lead) => lead.status === 'interested');
   return <><PageHeading kicker="YOUR NUMBERS, AT A GLANCE" title="My activity" description="A clear look at today’s shift and the conversations you’ve started." /><div className="activity-grid"><Metric icon={Timer} label="Time on shift" value={formatDuration(elapsed)} note={shift?.startedAt ? 'Shift currently active' : shift?.signedOutAt ? 'Shift complete today' : 'Not clocked in yet'} tone="metric-green" /><Metric icon={Phone} label="Calls logged" value={`${called} / ${leads.length}`} note="Businesses contacted today" /><Metric icon={BadgeCheck} label="Interested leads" value={interested.length} note="Meetings to follow up" tone="metric-coral" /></div><section className="panel activity-panel"><div className="panel-heading"><div><div className="section-eyebrow">TODAY · {formatShortDate()}</div><h2>Interested businesses</h2></div><span className="count-chip">{interested.length} leads</span></div>{interested.length ? interested.map((lead) => <div className="activity-lead" key={lead.id}><span className="activity-check"><Check size={16} /></span><div><b>{lead.business}</b><small>{lead.contact} · {lead.phone}</small>{lead.notes && <p>{lead.notes}</p>}</div><StatusPill status={lead.status} /></div>) : <div className="empty-state">No interested leads yet. Keep going, your next good conversation is out there.</div>}</section><div className="activity-footnote"><Clock3 size={15} /> Shift totals reset each day and stay available in the browser’s saved records.</div></>;
 }
-function AdminOverview({ leads, shifts, now, onNavigate, staff }) {
+function AdminOverview({ leads, shifts, now, onNavigate, staff, contacts = [], contactActivity = [] }) {
   const STAFF = staff;
   const called = leads.filter((lead) => lead.status !== 'pending').length;
   const interested = leads.filter((lead) => lead.status === 'interested');
   const liveStaff = STAFF.filter((person) => shifts[person.id]?.startedAt);
   const totalSeconds = STAFF.reduce((total, person) => { const shift = shifts[person.id]; return total + (shift ? shift.elapsed + (shift.startedAt ? Math.floor((now - new Date(shift.startedAt).getTime()) / 1000) : 0) : 0); }, 0);
   const conversion = called ? Math.round(interested.length / called * 100) : 0;
-  return <><PageHeading kicker={`${formatShortDate().toUpperCase()} · DAILY SUMMARY`} title="Team overview" description="Today’s attendance and call progress." action={<button className="primary-button" onClick={() => onNavigate('calls')}><CalendarDays size={15} /> Assign today’s calls</button>} /><div className="admin-metrics"><Metric icon={Users} label="Agents on shift" value={`${liveStaff.length} / ${STAFF.length}`} note={liveStaff.length ? `${liveStaff.map((person) => person.name.split(' ')[0]).join(', ')}` : 'No one clocked in yet'} tone="metric-green" /><Metric icon={BriefcaseBusiness} label="Calls assigned" value={leads.length} note="Across the team today" /><Metric icon={Phone} label="Calls completed" value={called} note={`${leads.length - called} still to call`} /><Metric icon={BadgeCheck} label="Interested" value={interested.length} note="Businesses to follow up" tone="metric-coral" /></div><div className="admin-content-grid"><section className="panel team-panel"><div className="panel-heading"><div><div className="section-eyebrow">TEAM & TIME</div><h2>Today’s activity</h2></div><span className="count-chip">{formatDuration(totalSeconds)} total</span></div><div className="team-table"><div className="team-table-head"><span>STAFF MEMBER</span><span>CALLS</span><span>INTERESTED</span><span>TIME TODAY</span></div>{STAFF.map((person) => { const assigned = leads.filter((lead) => lead.staffId === person.id); const touched = assigned.filter((lead) => lead.status !== 'pending').length; const yes = assigned.filter((lead) => lead.status === 'interested').length; const shift = shifts[person.id]; const seconds = shift ? shift.elapsed + (shift.startedAt ? Math.floor((now - new Date(shift.startedAt).getTime()) / 1000) : 0) : 0; return <div className="team-table-row" key={person.id}><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><span className="table-number">{touched}<small> / {assigned.length}</small></span><span className="table-number positive-number">{yes}</span><span className="table-time">{formatDuration(seconds)}</span></div>; })}</div></section><section className="panel interested-panel"><div className="panel-heading"><div><div className="section-eyebrow">FOLLOW UP</div><h2>Interested businesses</h2></div></div>{interested.length ? interested.map((lead) => { const assigned = STAFF.find((person) => person.id === lead.staffId); return <div className="interested-item" key={lead.id}><span className="interested-check"><Check size={14} /></span><div className="interested-copy"><b>{lead.business}</b><small>{lead.contact} · {lead.phone}</small><span>{assigned?.name || 'Staff member'}{lead.notes ? ` · ${lead.notes}` : ''}</span></div></div>; }) : <div className="empty-state compact">Interested businesses will appear here.</div>}</section></div><p className="local-data-note"><Clock3 size={14} /> Total team time today: {formatDuration(totalSeconds)}</p></>;
+  const submittedByStaff = Object.fromEntries(contactActivity.map((activity) => [activity.generatorId, activity.submitted]));
+  return <>
+    <PageHeading kicker={`${formatShortDate().toUpperCase()} · DAILY SUMMARY`} title="Team overview" description="Today’s attendance, call progress, and lead generation." action={<button className="primary-button" onClick={() => onNavigate('calls')}><CalendarDays size={15} /> Assign today’s calls</button>} />
+    <div className="admin-metrics"><Metric icon={Users} label="Agents on shift" value={`${liveStaff.length} / ${STAFF.length}`} note={liveStaff.length ? `${liveStaff.map((person) => person.name.split(' ')[0]).join(', ')}` : 'No one clocked in yet'} tone="metric-green" /><Metric icon={BriefcaseBusiness} label="Calls assigned" value={leads.length} note="Across the team today" /><Metric icon={Phone} label="Calls completed" value={called} note={`${leads.length - called} still to call`} /><Metric icon={BadgeCheck} label="Interested" value={interested.length} note="Businesses to follow up" tone="metric-coral" /></div>
+    <div className="admin-content-grid">
+      <section className="panel team-panel">
+        <div className="panel-heading"><div><div className="section-eyebrow">TEAM & TIME</div><h2>Today’s activity</h2></div><span className="count-chip">{formatDuration(totalSeconds)} total</span></div>
+        <div className="team-table">
+          <div className="team-table-head"><span>STAFF MEMBER</span><span>ACTIVITY</span><span>RESULTS</span><span>TIME TODAY</span></div>
+          {STAFF.map((person) => {
+            const assigned = leads.filter((lead) => lead.staffId === person.id);
+            const touched = assigned.filter((lead) => lead.status !== 'pending').length;
+            const yes = assigned.filter((lead) => lead.status === 'interested').length;
+            const isLeadAgent = person.role === 'contact-generator';
+            const submitted = submittedByStaff[person.id] || 0;
+            const awaitingReview = contacts.filter((contact) => contact.generatorId === person.id).length;
+            const shift = shifts[person.id];
+            const seconds = shift ? shift.elapsed + (shift.startedAt ? Math.floor((now - new Date(shift.startedAt).getTime()) / 1000) : 0) : 0;
+            return <div className="team-table-row" key={person.id}>
+              <div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{isLeadAgent ? 'Lead agent' : 'Call agent'}</small></span></div>
+              <span className="table-number">{isLeadAgent ? submitted : touched}<small>{isLeadAgent ? ' leads' : ` / ${assigned.length}`}</small></span>
+              <span className={`table-number ${isLeadAgent ? '' : 'positive-number'}`}>{isLeadAgent ? awaitingReview : yes}<small>{isLeadAgent ? ' review' : ' interested'}</small></span>
+              <span className="table-time">{formatDuration(seconds)}</span>
+            </div>;
+          })}
+        </div>
+      </section>
+      <section className="panel interested-panel"><div className="panel-heading"><div><div className="section-eyebrow">FOLLOW UP</div><h2>Interested businesses</h2></div></div>{interested.length ? interested.map((lead) => { const assigned = STAFF.find((person) => person.id === lead.staffId); return <div className="interested-item" key={lead.id}><span className="interested-check"><Check size={14} /></span><div className="interested-copy"><b>{lead.business}</b><small>{lead.contact} · {lead.phone}</small><span>{assigned?.name || 'Staff member'}{lead.notes ? ` · ${lead.notes}` : ''}</span></div></div>; }) : <div className="empty-state compact">Interested businesses will appear here.</div>}</section>
+    </div>
+    <p className="local-data-note"><Clock3 size={14} /> Total team time today: {formatDuration(totalSeconds)}</p>
+  </>;
 }
-function DailyCallsPage({ leads, contacts = [], onConsumeContacts, onAssign, staff }) {
-  const STAFF = staff;
+function DailyCallsPage({ leads, contacts = [], onCheckDuplicates, onAssign, staff }) {
   const [pastedRows, setPastedRows] = useState('');
   const [reviewRows, setReviewRows] = useState(null);
   const [selectedContactIds, setSelectedContactIds] = useState([]);
+  const [reviewDuplicates, setReviewDuplicates] = useState([]);
+  const [duplicateCheckState, setDuplicateCheckState] = useState('unchecked');
   const [error, setError] = useState('');
-  const review = (event) => {
-    event.preventDefault();
-    const rows = pastedRows.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => (line.includes('\t') ? line.split('\t') : line.split(',')).map((part) => part.trim()));
-    const parsed = rows.filter((row) => row[0] && row[1] && !/business\s*name/i.test(row[0])).map(([business, phone], index) => ({ id: `${Date.now()}-${index}`, business, phone }));
-    if (!parsed.length) { setError('Paste rows with a business name and phone number.'); return; }
-    setReviewRows(parsed);
+  const isCheckingDuplicates = duplicateCheckState === 'checking';
+
+  const parsePastedRows = () => pastedRows.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => (line.includes('\t') ? line.split('\t') : line.split(',')).map((part) => part.trim())).filter((row) => row[0] && row[1] && !/business\s*name/i.test(row[0])).map(([business, phone], index) => ({ id: `paste-${index}`, business, phone }));
+  const checkAndStageRows = async (rows, contactIds) => {
+    if (!rows.length) {
+      setReviewRows(null);
+      setReviewDuplicates([]);
+      setDuplicateCheckState('unchecked');
+      return;
+    }
+    setReviewRows(rows);
+    setReviewDuplicates([]);
+    setDuplicateCheckState('checking');
     setError('');
+    try {
+      const { duplicates } = await onCheckDuplicates(rows.map(({ id, business, phone }) => ({ id, business, phone })), contactIds);
+      setReviewDuplicates(duplicates || []);
+      setDuplicateCheckState('complete');
+    } catch (checkError) {
+      setDuplicateCheckState('error');
+      setError(checkError.message);
+    }
+  };
+  const review = async (event) => {
+    event.preventDefault();
+    const selectedContacts = contacts.filter((contact) => selectedContactIds.includes(contact.id));
+    const rows = [
+      ...selectedContacts.map((contact) => ({ id: contact.id, business: contact.business, phone: contact.phone })),
+      ...parsePastedRows(),
+    ];
+    if (!rows.length) { setError('Add submitted contacts or paste business names and phone numbers.'); return; }
+    await checkAndStageRows(rows, selectedContactIds);
   };
   const moveRow = (index, direction) => {
     const nextIndex = index + direction;
@@ -376,27 +435,84 @@ function DailyCallsPage({ leads, contacts = [], onConsumeContacts, onAssign, sta
     [nextRows[index], nextRows[nextIndex]] = [nextRows[nextIndex], nextRows[index]];
     setReviewRows(nextRows);
   };
+  const removeReviewRow = async (index) => {
+    const row = reviewRows[index];
+    const nextRows = reviewRows.filter((_, rowIndex) => rowIndex !== index);
+    const nextContactIds = selectedContactIds.filter((contactId) => contactId !== row.id);
+    setSelectedContactIds(nextContactIds);
+    await checkAndStageRows(nextRows, nextContactIds);
+  };
   const share = async () => {
-    if (!reviewRows?.length) return;
-    if (!STAFF.length) { setError('Approve at least one Call agent before sharing calls.'); return; }
-    const calls = reviewRows.map((row, index) => ({
-      id: `call-${Date.now()}-${index}-${Math.random().toString(16).slice(2, 6)}`,
-      business: row.business, contact: 'Not provided', phone: row.phone,
-      staffId: '', status: 'pending', notes: '', workDate: today(),
+    if (!reviewRows?.length || duplicateCheckState !== 'complete' || reviewDuplicates.length) return;
+    if (!staff.length) { setError('Approve at least one Call agent before sharing calls.'); return; }
+    const calls = reviewRows.map((row) => ({
+      id: row.id,
+      business: row.business,
+      contact: 'Not provided',
+      phone: row.phone,
+      staffId: '',
+      status: 'pending',
+      notes: '',
+      workDate: today(),
     }));
-    try { await onAssign(calls, selectedContactIds); }
-    catch (error) { setError(error.message); return; }
+    try {
+      await onAssign(calls, selectedContactIds);
+    } catch (assignError) {
+      if (assignError.code === 'duplicates') {
+        setReviewDuplicates(assignError.duplicates || []);
+        setDuplicateCheckState('complete');
+      }
+      setError(assignError.message);
+      return;
+    }
     setPastedRows('');
     setReviewRows(null);
     setSelectedContactIds([]);
+    setReviewDuplicates([]);
+    setDuplicateCheckState('unchecked');
     setError('');
   };
-  const totals = STAFF.map((person) => ({ ...person, count: leads.filter((lead) => lead.staffId === person.id).length }));
-  const addContactToReview = (contact) => {
-    setReviewRows((current) => [...(current || []), { id: contact.id, business: contact.business, phone: contact.phone }]);
-    setSelectedContactIds((current) => [...current, contact.id]);
+  const addContactToReview = async (contact) => {
+    const nextContactIds = [...selectedContactIds, contact.id];
+    const selectedContacts = contacts.filter((item) => nextContactIds.includes(item.id));
+    const rows = [
+      ...selectedContacts.map((item) => ({ id: item.id, business: item.business, phone: item.phone })),
+      ...parsePastedRows(),
+    ];
+    setSelectedContactIds(nextContactIds);
+    await checkAndStageRows(rows, nextContactIds);
   };
-  return <><PageHeading kicker={formatShortDate().toUpperCase()} title="Today’s calls" description="Review contact submissions or paste business names and numbers." />{contacts.length > 0 && <section className="panel submitted-contacts"><div className="panel-heading"><div><div className="section-eyebrow">FROM CONTACT GENERATORS</div><h2>Saved contacts</h2></div><span className="count-chip">{contacts.length} waiting</span></div>{contacts.map((contact) => <div className="submitted-contact" key={contact.id}><span><b>{contact.business}</b><small>{contact.phone} · {contact.area || 'Area not added'}{contact.generatorId ? ` · ${staff.find((person) => person.id === contact.generatorId)?.name || 'Generator'}` : ''}</small></span><button className="secondary-button" disabled={selectedContactIds.includes(contact.id)} onClick={() => addContactToReview(contact)}>{selectedContactIds.includes(contact.id) ? 'Added' : 'Add to review'}</button></div>)}</section>}<section className="panel assignment-panel"><form onSubmit={review}><label className="bulk-label" htmlFor="daily-calls">BUSINESS NAME, PHONE NUMBER<textarea id="daily-calls" rows="8" value={pastedRows} onChange={(event) => { setPastedRows(event.target.value); setReviewRows(null); setSelectedContactIds([]); setError(''); }} placeholder={'Northline Coffee, +1 415 555 0142\nMorrow Dental, +1 415 555 0176'} /></label><p className="bulk-hint">One business per line. You can paste directly from a spreadsheet.</p>{error && <p className="form-error">{error}</p>}<button className="primary-button assign-submit" type="submit"><Check size={15} /> Review call order</button></form></section>{reviewRows && <section className="panel distribution-panel review-panel"><div className="panel-heading"><div><div className="section-eyebrow">CHECK BEFORE SHARING</div><h2>Call order</h2></div><span className="count-chip">{reviewRows.length} calls</span></div><div className="review-list">{reviewRows.map((row, index) => <div className="review-row" key={row.id}><span className="review-index">{String(index + 1).padStart(2, '0')}</span><span className="review-business">{row.business}</span><span className="review-phone">{row.phone}</span><span className="review-controls"><button type="button" className="icon-button" onClick={() => moveRow(index, -1)} disabled={index === 0} aria-label={`Move ${row.business} up`} title="Move up"><ArrowUp size={15} /></button><button type="button" className="icon-button" onClick={() => moveRow(index, 1)} disabled={index === reviewRows.length - 1} aria-label={`Move ${row.business} down`} title="Move down"><ArrowDown size={15} /></button></span></div>)}</div><div className="review-actions"><button className="secondary-button" onClick={() => setReviewRows(null)}>Edit pasted list</button><button className="primary-button" onClick={share}><Users size={15} /> Share evenly</button></div></section>}<section className="panel distribution-panel"><div className="panel-heading"><div><div className="section-eyebrow">TODAY’S DISTRIBUTION</div><h2>Calls per staff member</h2></div><span className="count-chip">{leads.length} total</span></div><div className="distribution-list">{totals.map((person) => <div className="distribution-row" key={person.id}><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><b>{person.count} calls</b></div>)}</div></section></>;
+  const totals = staff.map((person) => ({ ...person, count: leads.filter((lead) => lead.staffId === person.id).length }));
+
+  return <>
+    <PageHeading kicker={formatShortDate().toUpperCase()} title="Today’s calls" description="Review lead-agent submissions, check for duplicates, and share calls evenly." />
+    {contacts.length > 0 && <section className="panel submitted-contacts"><div className="panel-heading"><div><div className="section-eyebrow">FROM CONTACT GENERATORS</div><h2>Saved contacts</h2></div><span className="count-chip">{contacts.length} waiting</span></div>{contacts.map((contact) => <div className="submitted-contact" key={contact.id}><span><b>{contact.business}</b><small>{contact.phone} · {contact.area || 'Area not added'}{contact.generatorId ? ` · ${staff.find((person) => person.id === contact.generatorId)?.name || 'Generator'}` : ''}</small></span><button className="secondary-button" disabled={selectedContactIds.includes(contact.id) || isCheckingDuplicates} onClick={() => addContactToReview(contact)}>{selectedContactIds.includes(contact.id) ? 'Added' : 'Add to review'}</button></div>)}</section>}
+    <section className="panel assignment-panel">
+      <form onSubmit={review}>
+        <label className="bulk-label" htmlFor="daily-calls">BUSINESS NAME, PHONE NUMBER<textarea id="daily-calls" rows="8" value={pastedRows} onChange={(event) => { setPastedRows(event.target.value); setReviewRows(null); setSelectedContactIds([]); setReviewDuplicates([]); setDuplicateCheckState('unchecked'); setError(''); }} placeholder={'Northline Coffee, +1 415 555 0142\nMorrow Dental, +1 415 555 0176'} /></label>
+        <p className="bulk-hint">One business per line. You can paste directly from a spreadsheet.</p>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="primary-button assign-submit" type="submit" disabled={isCheckingDuplicates}><Check size={15} /> {isCheckingDuplicates ? 'Checking duplicates…' : 'Review call order'}</button>
+      </form>
+    </section>
+    {reviewRows && <section className="panel distribution-panel review-panel">
+      <div className="panel-heading"><div><div className="section-eyebrow">CHECK BEFORE SHARING</div><h2>Call order</h2></div><span className="count-chip">{reviewRows.length} calls</span></div>
+      {duplicateCheckState === 'checking' && <p className="bulk-hint" role="status">Checking today’s calls and pending submissions for duplicates…</p>}
+      {duplicateCheckState === 'complete' && !reviewDuplicates.length && <p className="duplicate-check-success" role="status">No duplicates found. The calls are ready to share.</p>}
+      {reviewDuplicates.length > 0 && <p className="duplicate-check-warning" role="alert">{reviewDuplicates.length} possible duplicate{reviewDuplicates.length === 1 ? '' : 's'} found. Remove the flagged rows before sharing.</p>}
+      <div className="review-list">{reviewRows.map((row, index) => {
+        const duplicate = reviewDuplicates.find((item) => item.rowId === row.id);
+        return <div className={`review-row ${duplicate ? 'has-duplicate' : ''}`} key={row.id}>
+          <span className="review-index">{String(index + 1).padStart(2, '0')}</span>
+          <span className="review-business">{row.business}{duplicate && <small className="review-duplicate-note">Matches {duplicate.matchBusiness} by {duplicate.reason} ({duplicate.matchSource})</small>}</span>
+          <span className="review-phone">{row.phone}</span>
+          <span className="review-controls"><button type="button" className="icon-button" onClick={() => moveRow(index, -1)} disabled={index === 0} aria-label={`Move ${row.business} up`} title="Move up"><ArrowUp size={15} /></button><button type="button" className="icon-button" onClick={() => moveRow(index, 1)} disabled={index === reviewRows.length - 1} aria-label={`Move ${row.business} down`} title="Move down"><ArrowDown size={15} /></button><button type="button" className="icon-button" onClick={() => removeReviewRow(index)} aria-label={`Remove ${row.business}`} title="Remove from review"><X size={15} /></button></span>
+        </div>;
+      })}</div>
+      <div className="review-actions"><button className="secondary-button" onClick={() => { setReviewRows(null); setReviewDuplicates([]); setDuplicateCheckState('unchecked'); }}>Edit list</button><button className="primary-button" onClick={share} disabled={isCheckingDuplicates || duplicateCheckState !== 'complete' || reviewDuplicates.length > 0}><Users size={15} /> Share evenly</button></div>
+    </section>}
+    <section className="panel distribution-panel"><div className="panel-heading"><div><div className="section-eyebrow">TODAY’S DISTRIBUTION</div><h2>Calls per staff member</h2></div><span className="count-chip">{leads.length} total</span></div><div className="distribution-list">{totals.map((person) => <div className="distribution-row" key={person.id}><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><b>{person.count} calls</b></div>)}</div></section>
+  </>;
 }
 function AddLeadsModal({ onClose, onAdd }) {
   const [business, setBusiness] = useState('');

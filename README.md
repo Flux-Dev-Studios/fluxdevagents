@@ -13,7 +13,6 @@ A staff calling and contact-generation portal backed by PostgreSQL. Staff accoun
 
 - Node.js 20 or newer
 - PostgreSQL 14 or newer, running locally or hosted
-- A PostgreSQL user allowed to create the app database (or use an existing database)
 
 ## Configure the database
 
@@ -38,31 +37,20 @@ npm run dev
 
 Open the local URL printed by Vite. The Vite development server proxies `/api` requests to the Express API on port 3001. Build check: `npm run build`.
 
-## Deploy the frontend to Vercel with the API on Render
+## Deploy the app to Vercel
 
-Set the Vercel project root to the repository root, build command to `npm run build`, and output directory to `dist`. The `api/[...path].js` function forwards `/api/*` requests to the Render API, keeping browser requests same-origin so the session cookie works without cross-origin CORS settings.
+Set the Vercel project root to the repository root, build command to `npm run build`, and output directory to `dist`. The `api/[...path].js` function runs the Express API on Vercel; `backend/server/app.js` detects Vercel and does not start a separate listener.
 
-Set `RENDER_API_URL` in Vercel Project Settings for Production, Preview, and Development to the Render Web Service base URL, for example `https://your-api.onrender.com` (no `/api` suffix). Vercel does not need `DATABASE_URL` or `JWT_SECRET` for this setup.
+Vercel hosts the frontend and API; the app still needs a hosted PostgreSQL database. Use an external connection URL reachable from Vercel. In Vercel Project Settings, add these variables for each deployment environment:
 
-On Render, run the Web Service with `npm run api`. Set `NODE_ENV=production`, the Render Postgres internal `DATABASE_URL`, and a stable `JWT_SECRET` of at least 32 characters. Set `PGSSL=true` if required by your database provider. Do not set `SERVE_FRONTEND=true`; Vercel serves the frontend. Set the Render health check path to `/api/health`.
+- `DATABASE_URL`: the hosted PostgreSQL connection string.
+- `PGSSL`: set to `true` if the provider requires SSL.
+- `JWT_SECRET`: a stable random secret of at least 32 characters.
+- `PGPOOL_MAX`: optional; defaults to `1` on Vercel to limit connections per function instance.
 
-Initialize the Render database once using its external connection URL from your computer. Set `DB_CREATE_IF_MISSING=false` for that run, plus `JWT_SECRET`, `ADMIN_EMAIL`, and an `ADMIN_PASSWORD` of at least 12 characters, then run `npm run db:setup`. Never commit `.env` or database credentials.
+Initialize the hosted database schema and admin account once using the provider's connection URL locally. Set `DB_CREATE_IF_MISSING=false` if the provider already created the database, plus `DATABASE_URL`, `PGSSL` if required, `JWT_SECRET`, `ADMIN_EMAIL`, and an `ADMIN_PASSWORD` of at least 12 characters, then run `npm run db:setup`. Never commit `.env` or database credentials.
 
-## Deploy the full app to Render
-
-Create a Render PostgreSQL database and a Web Service from this repository. Use the repository root as the service root directory, `npm install && npm run build` as the build command, and `npm run api` as the start command. Set `SERVE_FRONTEND=true` so Express serves the built frontend from `dist` alongside the `/api` routes. Set the health check path to `/api/health`.
-
-Add `NODE_ENV=production`, `SERVE_FRONTEND=true`, the database's internal `DATABASE_URL`, and a unique `JWT_SECRET` of at least 32 characters to the Render Web Service environment. Set `PGSSL=true` if required by the database provider. Choose paid service and database plans for an always-on deployment; free plans may sleep or expire.
-
-Initialize the Render database once from your computer using its external connection URL in your local, git-ignored `.env`. Set `DB_CREATE_IF_MISSING=false` for that run because Render has already created the database, then run `npm run db:setup`. For PowerShell:
-
-```powershell
-$env:DB_CREATE_IF_MISSING = 'false'
-npm run db:setup
-Remove-Item Env:DB_CREATE_IF_MISSING
-```
-
-Your local `.env` must also contain `JWT_SECRET`, `ADMIN_EMAIL`, and an `ADMIN_PASSWORD` of at least 12 characters. Never commit it.
+Before deploying lead activity tracking to an existing database, run `npm run db:migrate:lead-activity` once with `DATABASE_URL` configured locally. This adds an assignment timestamp and index without changing existing records or the admin password.
 
 ## Initial accounts
 
@@ -73,4 +61,4 @@ New signups are stored as unapproved accounts and cannot sign in until an admin 
 
 Contact generators submit one or many businesses for admin review. Admins can add these to a daily batch, review/reorder the calls, and share them evenly among approved Call agents. Staff call outcomes, notes, and daily clock-in/out times are stored in PostgreSQL.
 
-Do not commit `.env`. For production, use a managed PostgreSQL service, HTTPS, a strong unique `JWT_SECRET`, and a production reverse proxy that routes `/api` to the Express server.
+Do not commit `.env`. For production, use a managed PostgreSQL service, HTTPS, and a strong stable `JWT_SECRET`.

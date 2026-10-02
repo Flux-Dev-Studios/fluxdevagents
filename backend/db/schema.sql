@@ -42,6 +42,9 @@ CREATE TABLE IF NOT EXISTS generated_contacts (
   map_query TEXT NOT NULL DEFAULT '',
   generator_id UUID NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
   work_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  assigned_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE generated_contacts ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS generated_contacts_day_idx ON generated_contacts (work_date);
+CREATE INDEX IF NOT EXISTS generated_contacts_generator_day_idx ON generated_contacts (generator_id, work_date);
