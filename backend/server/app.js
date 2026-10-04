@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import bcrypt from 'bcryptjs';
+import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool } from './db.js';
@@ -21,6 +22,22 @@ app.use((req, res, next) => { req.db = pool; next(); });
 const publicUser = (user) => ({ id: user.id, name: user.full_name, email: user.email, role: user.role, approved: user.approved });
 const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const validRole = (role) => role === 'call-agent' || role === 'contact-generator';
+const previouslyApprovedContactSql = (contactAlias) => `(
+  EXISTS (
+    SELECT 1 FROM generated_contacts previous
+    WHERE previous.approved_at IS NOT NULL
+      AND previous.id <> ${contactAlias}.id
+      AND (
+        NULLIF(regexp_replace(previous.phone, '[^0-9]', '', 'g'), '') = NULLIF(regexp_replace(${contactAlias}.phone, '[^0-9]', '', 'g'), '')
+        OR NULLIF(regexp_replace(lower(previous.business_name), '[^[:alnum:]]', '', 'g'), '') = NULLIF(regexp_replace(lower(${contactAlias}.business_name), '[^[:alnum:]]', '', 'g'), '')
+      )
+  )
+  OR EXISTS (
+    SELECT 1 FROM daily_calls previous
+    WHERE NULLIF(regexp_replace(previous.phone, '[^0-9]', '', 'g'), '') = NULLIF(regexp_replace(${contactAlias}.phone, '[^0-9]', '', 'g'), '')
+       OR NULLIF(regexp_replace(lower(previous.business_name), '[^[:alnum:]]', '', 'g'), '') = NULLIF(regexp_replace(lower(${contactAlias}.business_name), '[^[:alnum:]]', '', 'g'), '')
+  )
+)`;
 const findWorkspaceCallDuplicates = async (client, calls, contactIds = []) => {
   const [existingCalls, pendingContacts] = await Promise.all([
     client.query(`SELECT id::text AS id, business_name AS business, phone FROM daily_calls WHERE work_date = CURRENT_DATE`),
@@ -89,13 +106,47 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
     ? pool.query(`SELECT staff_id AS "staffId", elapsed_seconds AS elapsed, clocked_in_at AS "startedAt", signed_out_at AS "signedOutAt" FROM daily_shifts WHERE work_date = CURRENT_DATE`)
     : pool.query(`SELECT staff_id AS "staffId", elapsed_seconds AS elapsed, clocked_in_at AS "startedAt", signed_out_at AS "signedOutAt" FROM daily_shifts WHERE work_date = CURRENT_DATE AND staff_id = $1`, [req.user.id]);
   const contactsPromise = req.user.role === 'admin'
-    ? pool.query(`SELECT id, business_name AS business, phone, area, category, map_query AS "mapQuery", generator_id AS "generatorId", work_date AS "workDate" FROM generated_contacts WHERE work_date = CURRENT_DATE AND assigned_at IS NULL ORDER BY created_at`)
+    ? pool.query(`SELECT id, submission_id AS "submissionId", business_name AS business, phone, area, category, map_query AS "mapQuery", generator_id AS "generatorId", work_date AS "workDate" FROM generated_contacts WHERE work_date = CURRENT_DATE AND approved_at IS NOT NULL AND assigned_at IS NULL ORDER BY created_at`)
     : Promise.resolve({ rows: [] });
   const contactActivityPromise = req.user.role === 'admin'
     ? pool.query(`SELECT generator_id AS "generatorId", COUNT(*)::int AS submitted FROM generated_contacts WHERE work_date = CURRENT_DATE GROUP BY generator_id`)
     : Promise.resolve({ rows: [] });
-  const [calls, staff, shifts, contacts, contactActivity] = await Promise.all([callsPromise, staffPromise, shiftPromise, contactsPromise, contactActivityPromise]);
-  return res.json({ user: publicUser(req.user), calls: calls.rows, staff: staff.rows, shifts: shifts.rows, contacts: contacts.rows, contactActivity: contactActivity.rows });
+  const contactSubmissionsPromise = req.user.role === 'admin'
+    ? pool.query(
+      `SELECT gc.submission_id AS id, gc.generator_id AS "generatorId", su.full_name AS "generatorName",
+              MIN(gc.created_at) AS "submittedAt", COUNT(*)::int AS count,
+              json_agg(json_build_object(
+                'id', gc.id, 'business', gc.business_name, 'phone', gc.phone, 'area', gc.area, 'category', gc.category,
+                'previouslyApproved', ${previouslyApprovedContactSql('gc')}
+              ) ORDER BY gc.created_at) AS contacts
+       FROM generated_contacts gc
+       JOIN staff_users su ON su.id = gc.generator_id
+       WHERE gc.work_date = CURRENT_DATE AND gc.approved_at IS NULL AND gc.submission_id IS NOT NULL
+       GROUP BY gc.submission_id, gc.generator_id, su.full_name
+       ORDER BY MIN(gc.created_at)`,
+    )
+    : Promise.resolve({ rows: [] });
+  const myContactsPromise = req.user.role === 'contact-generator'
+    ? pool.query(
+      `SELECT id, submission_id AS "submissionId", business_name AS business, phone, area, category,
+              work_date AS "workDate", approved_at AS "approvedAt", assigned_at AS "assignedAt", created_at AS "createdAt"
+       FROM generated_contacts WHERE generator_id = $1 AND work_date = CURRENT_DATE ORDER BY created_at DESC`,
+      [req.user.id],
+    )
+    : Promise.resolve({ rows: [] });
+  const [calls, staff, shifts, contacts, contactActivity, contactSubmissions, myContacts] = await Promise.all([
+    callsPromise, staffPromise, shiftPromise, contactsPromise, contactActivityPromise, contactSubmissionsPromise, myContactsPromise,
+  ]);
+  return res.json({
+    user: publicUser(req.user),
+    calls: calls.rows,
+    staff: staff.rows,
+    shifts: shifts.rows,
+    contacts: contacts.rows,
+    contactActivity: contactActivity.rows,
+    contactSubmissions: contactSubmissions.rows,
+    myContacts: myContacts.rows,
+  });
 }));
 
 app.get('/api/team/pending', requireUser, requireAdmin, asyncRoute(async (_req, res) => {
@@ -146,24 +197,93 @@ app.post('/api/contacts/batch', requireUser, requireRole('contact-generator'), a
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const submissionId = randomUUID();
     const created = [];
     for (const contact of contacts) {
       const business = String(contact.business || '').trim();
       const phone = String(contact.phone || '').trim();
       if (!business || !phone) continue;
       const { rows } = await client.query(
-        `INSERT INTO generated_contacts (business_name, phone, area, category, map_query, generator_id)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, business_name AS business, phone, area, category, map_query AS "mapQuery", generator_id AS "generatorId", work_date AS "workDate"`,
-        [business, phone, String(contact.area || ''), String(contact.category || ''), String(contact.mapQuery || ''), req.user.id],
+        `INSERT INTO generated_contacts (submission_id, business_name, phone, area, category, map_query, generator_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, submission_id AS "submissionId", business_name AS business, phone, area, category, map_query AS "mapQuery", generator_id AS "generatorId", work_date AS "workDate", approved_at AS "approvedAt", assigned_at AS "assignedAt", created_at AS "createdAt"`,
+        [submissionId, business, phone, String(contact.area || ''), String(contact.category || ''), String(contact.mapQuery || ''), req.user.id],
       );
       created.push(rows[0]);
     }
     if (!created.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'No valid business and phone pairs found.' }); }
     await client.query('COMMIT');
-    return res.status(201).json({ contacts: created });
+    return res.status(201).json({ submissionId, contacts: created });
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
+}));
+
+app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRoute(async (req, res) => {
+  const contactIds = Array.isArray(req.body.contactIds) ? [...new Set(req.body.contactIds.map(String))] : [];
+  const validUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!contactIds.length || contactIds.length > 1000 || contactIds.some((id) => !validUuid.test(id))) {
+    return res.status(400).json({ error: 'Select between 1 and 1000 valid leads to approve.' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
+    const pending = await client.query(
+      `SELECT id::text AS id, business_name AS business, phone
+       FROM generated_contacts
+       WHERE id = ANY($1::uuid[]) AND generator_id = $2 AND work_date = CURRENT_DATE AND approved_at IS NULL
+       FOR UPDATE`,
+      [contactIds, req.params.id],
+    );
+    if (!pending.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'No selected pending leads were found for this lead agent.' });
+    }
+    const pendingIds = pending.rows.map((contact) => contact.id);
+    const duplicates = await client.query(
+      `SELECT current_contact.id::text AS id
+       FROM generated_contacts current_contact
+       WHERE current_contact.id = ANY($1::uuid[])
+         AND ${previouslyApprovedContactSql('current_contact')}`,
+      [pendingIds],
+    );
+    const duplicateIds = duplicates.rows.map((contact) => contact.id);
+    const eligibleIds = pendingIds.filter((id) => !duplicateIds.includes(id));
+    const approved = eligibleIds.length
+      ? await client.query(
+        `UPDATE generated_contacts
+         SET approved_at = NOW()
+         WHERE id = ANY($1::uuid[]) AND generator_id = $2 AND work_date = CURRENT_DATE AND approved_at IS NULL
+         RETURNING id, submission_id AS "submissionId", business_name AS business, phone, area, category,
+                   map_query AS "mapQuery", generator_id AS "generatorId", work_date AS "workDate"`,
+        [eligibleIds, req.params.id],
+      )
+      : { rows: [] };
+    await client.query('COMMIT');
+    if (!approved.rows.length) {
+      return res.status(409).json({
+        error: 'All selected leads were previously approved. Review the flagged leads and select different contacts.',
+        previouslyApprovedIds: duplicateIds,
+      });
+    }
+    return res.json({ contacts: approved.rows, previouslyApprovedIds: duplicateIds });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
+app.delete('/api/generated-contacts/:id', requireUser, requireAdmin, asyncRoute(async (req, res) => {
+  const { rows } = await pool.query(
+    `DELETE FROM generated_contacts
+     WHERE id = $1 AND work_date = CURRENT_DATE AND assigned_at IS NULL
+     RETURNING id`,
+    [req.params.id],
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Unassigned lead not found.' });
+  return res.status(204).end();
 }));
 
 app.post('/api/calls/assign', requireUser, requireAdmin, asyncRoute(async (req, res) => {
@@ -175,6 +295,19 @@ app.post('/api/calls/assign', requireUser, requireAdmin, asyncRoute(async (req, 
     await client.query('BEGIN');
     await client.query('LOCK TABLE daily_calls IN SHARE ROW EXCLUSIVE MODE');
     await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
+    const selectedContactIds = [...new Set(contactIds.map(String))];
+    if (selectedContactIds.length) {
+      const eligibleContacts = await client.query(
+        `SELECT id FROM generated_contacts
+         WHERE id = ANY($1::uuid[]) AND approved_at IS NOT NULL AND assigned_at IS NULL
+         FOR UPDATE`,
+        [selectedContactIds],
+      );
+      if (eligibleContacts.rowCount !== selectedContactIds.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'One or more selected leads are no longer available for call review.' });
+      }
+    }
     const duplicates = await findWorkspaceCallDuplicates(client, calls, contactIds);
     if (duplicates.length) {
       await client.query('ROLLBACK');
@@ -199,7 +332,7 @@ app.post('/api/calls/assign', requireUser, requireAdmin, asyncRoute(async (req, 
       counts[assigned.id] += 1;
       saved.push(rows[0]);
     }
-    if (contactIds.length) await client.query('UPDATE generated_contacts SET assigned_at = NOW() WHERE id = ANY($1::uuid[]) AND assigned_at IS NULL', [contactIds]);
+    if (selectedContactIds.length) await client.query('UPDATE generated_contacts SET assigned_at = NOW() WHERE id = ANY($1::uuid[]) AND approved_at IS NOT NULL AND assigned_at IS NULL', [selectedContactIds]);
     if (!saved.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'No valid calls were submitted.' }); }
     await client.query('COMMIT');
     return res.status(201).json({ calls: saved });

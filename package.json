@@ -9,6 +9,7 @@
     "client": "vite --config frontend/vite.config.js --host 0.0.0.0",
     "db:setup": "node backend/db/setup.mjs",
     "db:migrate:lead-activity": "node backend/db/migrate-lead-activity.mjs",
+    "db:migrate:lead-submissions": "node backend/db/migrate-lead-submissions.mjs",
     "build": "vite build --config frontend/vite.config.js",
     "preview": "vite preview --config frontend/vite.config.js --host 0.0.0.0"
   },

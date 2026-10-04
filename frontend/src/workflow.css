@@ -1,0 +1,369 @@
+.submission-approval-panel,
+.my-leads-panel {
+  padding: 18px;
+  margin-bottom: 14px;
+}
+
+.submission-card {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.submission-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.submission-card-heading > div {
+  display: grid;
+  gap: 4px;
+}
+
+.submission-card-heading b {
+  font-size: 12px;
+}
+
+.submission-card-heading small,
+.submission-lead-row small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.lead-agent-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lead-agent-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  min-height: 60px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--white);
+  text-align: left;
+}
+
+.lead-agent-card:hover {
+  border-color: var(--green-2);
+  background: var(--green-soft);
+}
+
+.lead-agent-avatar {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 50%;
+  color: var(--green);
+  background: var(--green-soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.lead-agent-copy {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lead-agent-copy b {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lead-agent-copy small,
+.lead-agent-tab-header small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.lead-agent-card > svg {
+  color: var(--muted);
+}
+
+.lead-agent-tab {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--white);
+}
+
+.lead-agent-tab-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.lead-agent-tab-header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.lead-agent-tab-header > div b {
+  font-size: 11px;
+}
+
+.lead-agent-tab-header .secondary-button {
+  min-height: 31px;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.agent-leads-content {
+  max-height: min(34vh, 320px);
+  min-height: 96px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px;
+}
+
+.agent-leads-content .submission-lead-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.lead-agent-tab-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--line);
+  background: var(--white);
+}
+
+.lead-agent-tab-footer > span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.lead-selection {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  margin-top: 3px;
+  color: var(--green);
+  font-size: 9px;
+}
+
+.lead-selection input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--green-2);
+}
+
+.lead-selection.is-duplicate {
+  color: #b64c45;
+}
+
+.lead-review-selection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.lead-review-selection > span {
+  color: var(--muted);
+  font-size: 9px;
+  text-align: right;
+}
+
+.submission-lead-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 7px;
+}
+
+.submission-lead-row {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+}
+
+.submission-lead-row {
+  padding-right: 42px;
+}
+
+.submission-lead-row b,
+.submission-lead-row span {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lead-submission-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.my-leads-list {
+  display: grid;
+}
+
+.my-lead-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+}
+
+.my-lead-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.my-lead-copy b,
+.my-lead-copy span {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.my-lead-copy small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.submission-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: #8b7350;
+  font-size: 9px;
+}
+
+.submission-status i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d3a64c;
+}
+
+.submission-status.approved {
+  color: var(--green-2);
+}
+
+.submission-status.approved i {
+  background: var(--green-2);
+}
+
+.submission-status.shared {
+  color: #55758f;
+}
+
+.submission-status.shared i {
+  background: #55758f;
+}
+
+.lead-actions-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.submission-lead-row > .lead-actions-menu {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.lead-menu-trigger {
+  color: var(--muted);
+}
+
+.lead-menu-popover {
+  position: absolute;
+  top: calc(100% + 3px);
+  right: 0;
+  z-index: 8;
+  min-width: 105px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--white);
+  box-shadow: 0 8px 22px #172d451c;
+}
+
+.lead-menu-popover button {
+  width: 100%;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 4px;
+  color: #b64c45;
+  background: transparent;
+  text-align: left;
+  font-size: 10px;
+}
+
+.lead-menu-popover button:hover {
+  background: #fff0eb;
+}
+
+@media (max-width: 620px) {
+  .submission-approval-panel,
+  .my-leads-panel {
+    padding: 14px;
+  }
+
+  .submission-card-heading,
+  .my-lead-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .lead-agent-tab-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .lead-agent-tab-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .lead-review-selection {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .lead-review-selection > span {
+    text-align: left;
+  }
+
+  .lead-submission-metrics {
+    grid-template-columns: 1fr;
+  }
+}

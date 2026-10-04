@@ -52,6 +52,8 @@ Initialize the hosted database schema and admin account once using the provider'
 
 Before deploying lead activity tracking to an existing database, run `npm run db:migrate:lead-activity` once with `DATABASE_URL` configured locally. This adds an assignment timestamp and index without changing existing records or the admin password.
 
+For an existing database, run `npm run db:migrate:lead-submissions` after deploying this version. Unassigned existing leads and new submissions wait for admin approval; leads already assigned to call agents remain unchanged. Lead agents can check progress in **My leads**. Admins review submissions in **Today’s leads**, where contacts matching a previously approved business name or phone number are flagged and excluded from selection. New contacts are selected by default; admins can adjust the selection, delete unwanted leads, and approve only selected contacts to move them to **Today’s calls** for review and sharing with call agents.
+
 ## Initial accounts
 
 - The initial admin is `asiegbukelvin3974@gmail.com`; its name and password come from `ADMIN_NAME` and `ADMIN_PASSWORD` in `.env`.
