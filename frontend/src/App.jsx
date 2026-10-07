@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Activity, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUpRight, BadgeCheck,
-  BriefcaseBusiness, CalendarDays, Check, CheckCheck, ChevronDown,
-  Clock3, FilePlus2, Filter, LayoutDashboard, LogOut, MoreHorizontal,
-  ArrowDown, ArrowUp, MapPin, MoreVertical, Phone, Plus, Search, Settings2, ShieldCheck, Timer, Users, X,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, BadgeCheck,
+  BriefcaseBusiness, CalendarDays, Check, CheckCheck,
+  Clock3, LayoutDashboard, LogOut, MapPin, MoreHorizontal, MoreVertical,
+  Phone, Plus, Search, ShieldCheck, Timer, Users, X,
 } from 'lucide-react';
 
 const ROLE_LABELS = { 'call-agent': 'Call agent', 'contact-generator': 'Lead agent' };
@@ -234,6 +234,17 @@ export default function App() {
       return false;
     }
   };
+  const saveContacts = async (contacts) => {
+    const result = await apiRequest('/contacts/batch', { method: 'POST', body: JSON.stringify({ contacts }) });
+    setMyContacts((current) => [...current, ...(result.contacts || [])]);
+    setToast(`${result.contacts.length} contact${result.contacts.length === 1 ? '' : 's'} saved for admin review.`);
+  };
+  const assignCalls = async (newCalls, contactIds) => {
+    const result = await apiRequest('/calls/assign', { method: 'POST', body: JSON.stringify({ calls: newCalls, contactIds }) });
+    setLeads((current) => [...current, ...result.calls]);
+    setContactPool((current) => current.filter((contact) => !contactIds.includes(contact.id)));
+    setToast(`${result.calls.length} calls shared across the team.`);
+  };
   const signOut = async () => { await apiRequest('/auth/logout', { method: 'POST' }).catch(() => {}); setUser(null); setStaff([]); setLeads([]); setContactPool([]); setContactSubmissions([]); setMyContacts([]); setContactActivity([]); setShifts({}); setMobileNav(false); setApiError(''); };
   const activeShift = user && user.role !== 'admin' ? shifts[user.id] : null;
   const elapsed = activeShift ? activeShift.elapsed + (activeShift.startedAt ? Math.max(0, Math.floor((now - new Date(activeShift.startedAt).getTime()) / 1000)) : 0) : 0;
@@ -324,9 +335,18 @@ export default function App() {
       <div className="page-content">
         {user.role === 'call-agent' && activePage === 'today' && <StaffToday user={user} leads={staffLeads} shift={activeShift} elapsed={elapsed} onClockIn={clockIn} onClockOut={clockOut} onUpdate={updateLead} now={now} />}
         {user.role === 'admin' && activePage === 'overview' && <AdminOverview leads={dailyCalls} shifts={shifts} now={now} onNavigate={setPage} staff={staff.filter((person) => person.approved)} contacts={contactPool} contactActivity={contactActivity} />}
-        {user.role === 'admin' && activePage === 'calls' && <DailyCallsPage leads={dailyCalls} contacts={contactPool} staff={staff.filter((person) => person.approved && person.role === 'call-agent')} onCheckDuplicates={(calls, contactIds) => apiRequest('/calls/check-duplicates', { method: 'POST', body: JSON.stringify({ calls, contactIds }) })} onAssign={async (newCalls, contactIds) => { const result = await apiRequest('/calls/assign', { method: 'POST', body: JSON.stringify({ calls: newCalls, contactIds }) }); setLeads((current) => [...current, ...result.calls]); setContactPool((current) => current.filter((contact) => !contactIds.includes(contact.id))); setToast(`${result.calls.length} calls shared across the team.`); }} />}
+        {user.role === 'admin' && activePage === 'calls' && <DailyCallsPage
+          leads={dailyCalls}
+          contacts={contactPool}
+          staff={staff.filter((person) => person.approved && person.role === 'call-agent')}
+          onDeleteLead={deleteGeneratedContact}
+          onCheckDuplicates={(calls, contactIds) => apiRequest('/calls/check-duplicates', { method: 'POST', body: JSON.stringify({ calls, contactIds }) })}
+          onAssign={assignCalls}
+        />}
+        {user.role === 'admin' && activePage === 'leads' && <TodayLeadsPage submissions={contactSubmissions} onApproveSubmission={approveContactSubmission} onDeleteLead={deleteGeneratedContact} />}
         {user.role === 'admin' && activePage === 'team' && <TeamApprovals staff={staff} onApprove={approveStaff} onDeny={denyStaff} onDelete={deleteStaff} onRoleChange={updateStaffRole} />}
-        {user.role === 'contact-generator' && activePage === 'generate' && <ContactGenerator user={user} shift={activeShift} elapsed={elapsed} onClockIn={clockIn} onClockOut={clockOut} onSave={async (contacts) => { const result = await apiRequest('/contacts/batch', { method: 'POST', body: JSON.stringify({ contacts }) }); setToast(`${result.contacts.length} contact${result.contacts.length === 1 ? '' : 's'} saved for admin review.`); }} />}
+        {user.role === 'contact-generator' && activePage === 'generate' && <ContactGenerator user={user} shift={activeShift} elapsed={elapsed} saved={myContacts.length} onClockIn={clockIn} onClockOut={clockOut} onSave={saveContacts} />}
+        {user.role === 'contact-generator' && activePage === 'my-leads' && <MyLeadsPage contacts={myContacts} />}
       </div>
     </main>
     {toast && <div className="toast"><Check size={15} />{toast}</div>}
@@ -451,13 +471,13 @@ function Metric({ label, value, note, icon: Icon, trend, tone = '' }) {
 function PageHeading({ kicker, title, description, action }) {
   return <div className="page-heading"><div><div className="page-kicker">{kicker}</div><h1>{title}</h1><p>{description}</p></div>{action}</div>;
 }
-function StaffToday({ user, leads, shift, elapsed, onClockIn, onClockOut, onUpdate, now }) {
+function StaffToday({ user, leads, shift, elapsed, onClockIn, onClockOut, onUpdate }) {
   const called = leads.filter((lead) => lead.status !== 'pending').length;
   const interested = leads.filter((lead) => lead.status === 'interested').length;
   const clockedIn = Boolean(shift?.startedAt);
   return <>
     <PageHeading kicker={formatShortDate().toUpperCase()} title={`Good morning, ${user.name.split(' ')[0]}.`} description="Your calls and work time for today." action={<span className={`shift-indicator ${clockedIn ? 'on' : ''}`}><i />{clockedIn ? 'Shift in progress' : shift?.signedOutAt ? 'Shift complete' : 'Not clocked in'}</span>} />
-    <section className="staff-overview"><div className={`clock-panel ${clockedIn ? 'clock-active' : ''}`}><div className="clock-panel-copy"><span className="panel-kicker"><Timer size={14} /> DAILY TIME</span><div className="clock-time">{formatDuration(elapsed)}</div><div className="clock-caption">{clockedIn ? `Started at ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(shift.startedAt))}` : shift?.signedOutAt ? 'Today’s time is saved.' : 'Clock in when you start work.'}</div></div><button className={`clock-button ${clockedIn ? 'clock-out' : ''}`} onClick={clockedIn ? onClockOut : onClockIn}><span>{clockedIn ? <LogOut size={16} /> : <Timer size={16} />}</span>{clockedIn ? 'Clock out' : 'Clock in'}<ArrowRight size={15} /></button></div><div className="today-stats"><div className="today-stat"><span>Assigned calls</span><b>{String(leads.length).padStart(2, '0')}</b><small>today</small></div><div className="today-stat"><span>Calls completed</span><b>{String(called).padStart(2, '0')}</b><small>of {leads.length}</small></div><div className="today-stat"><span>Interested</span><b className="positive-number">{String(interested).padStart(2, '0')}</b><small>for follow-up</small></div><div className="daily-progress"><div><span>Today’s progress</span><b>{leads.length ? Math.round(called / leads.length * 100) : 0}%</b></div><div className="progress-track"><i style={{ width: `${leads.length ? called / leads.length * 100 : 0}%` }} /></div></div></div></section>
+    <section className="staff-overview"><div className={`clock-panel ${clockedIn ? 'clock-active' : ''}`}><div className="clock-panel-copy"><span className="panel-kicker"><Timer size={14} /> DAILY TIME</span><div className="clock-time">{formatDuration(elapsed)}</div><div className="clock-caption">{clockedIn ? `Started at ${formatClockTime(shift.startedAt)}` : shift?.signedOutAt ? 'Today’s time is saved.' : 'Clock in when you start work.'}</div></div><button className={`clock-button ${clockedIn ? 'clock-out' : ''}`} onClick={clockedIn ? onClockOut : onClockIn}><span>{clockedIn ? <LogOut size={16} /> : <Timer size={16} />}</span>{clockedIn ? 'Clock out' : 'Clock in'}<ArrowRight size={15} /></button></div><div className="today-stats"><div className="today-stat"><span>Assigned calls</span><b>{String(leads.length).padStart(2, '0')}</b><small>today</small></div><div className="today-stat"><span>Calls completed</span><b>{String(called).padStart(2, '0')}</b><small>of {leads.length}</small></div><div className="today-stat"><span>Interested</span><b className="positive-number">{String(interested).padStart(2, '0')}</b><small>for follow-up</small></div><div className="daily-progress"><div><span>Today’s progress</span><b>{leads.length ? Math.round(called / leads.length * 100) : 0}%</b></div><div className="progress-track"><i style={{ width: `${leads.length ? called / leads.length * 100 : 0}%` }} /></div></div></div></section>
     <section className="queue-section"><div className="section-title-row"><div><div className="section-eyebrow">YOUR TASKS</div><h2>Today’s calls <span>{leads.length}</span></h2></div></div><div className="lead-list">{leads.length ? leads.map((lead, index) => <StaffLead key={lead.id} lead={lead} index={index} onUpdate={onUpdate} />) : <div className="empty-state">No calls assigned for today.</div>}</div><div className="queue-foot"><span><span className="queue-dot" /> {leads.length - called} calls remaining</span><span>Call results and notes save automatically</span></div></section>
     <p className="local-data-note"><ShieldCheck size={14} /> Your activity is saved to your workspace.</p>
   </>;
@@ -469,18 +489,12 @@ function StaffLead({ lead, index, onUpdate }) {
   const chooseStatus = (status) => { onUpdate(lead.id, { status }); setExpanded(status === 'interested' || Boolean(lead.notes)); };
   return <article className={`lead-row ${lead.status === 'interested' ? 'lead-positive' : ''}`}><div className="lead-index">{String(index + 1).padStart(2, '0')}</div><div className="lead-main"><div className="lead-title-line"><h3>{lead.business}</h3><StatusPill status={lead.status} /></div><div className="lead-details"><span>{lead.category}</span><i />{lead.location}<i /><span>{lead.website}</span></div><div className="lead-contact"><b>{lead.contact}</b><a href={`tel:${lead.phone.replace(/[^+\d]/g, '')}`}><Phone size={13} />{lead.phone}</a></div>{lead.meeting && <div className="meeting-note"><BadgeCheck size={14} />{lead.meeting}</div>}{expanded && <div className="note-editor"><label htmlFor={`note-${lead.id}`}>Call note</label><textarea id={`note-${lead.id}`} rows="2" placeholder="Add details from your conversation..." value={note} onChange={(event) => setNote(event.target.value)} onBlur={() => onUpdate(lead.id, { notes: note })} /></div>}</div><div className="lead-actions"><span className="outcome-label">{lead.status === 'pending' ? 'LOG OUTCOME' : 'UPDATE OUTCOME'}</span><div className="outcome-buttons"><button className={`outcome-button outcome-yes ${lead.status === 'interested' ? 'selected' : ''}`} onClick={() => chooseStatus(lead.status === 'interested' ? 'pending' : 'interested')} title="Interested, wants a meeting" aria-label="Mark as interested"><Check size={16} /></button><button className={`outcome-button outcome-no ${lead.status === 'not-interested' ? 'selected' : ''}`} onClick={() => chooseStatus(lead.status === 'not-interested' ? 'pending' : 'not-interested')} title="Not interested" aria-label="Mark as not interested"><X size={16} /></button><button className={`outcome-button outcome-neutral ${lead.status === 'no-answer' ? 'selected' : ''}`} onClick={() => chooseStatus(lead.status === 'no-answer' ? 'pending' : 'no-answer')} title="No answer" aria-label="Mark as no answer"><Phone size={14} /></button><button className="outcome-button outcome-note" onClick={() => setExpanded(!expanded)} title="Add a call note" aria-label="Add a call note"><MoreHorizontal size={17} /></button></div></div></article>;
 }
-function StaffActivity({ user, leads, shift, elapsed }) {
-  const called = leads.filter((lead) => lead.status !== 'pending').length;
-  const interested = leads.filter((lead) => lead.status === 'interested');
-  return <><PageHeading kicker="YOUR NUMBERS, AT A GLANCE" title="My activity" description="A clear look at today’s shift and the conversations you’ve started." /><div className="activity-grid"><Metric icon={Timer} label="Time on shift" value={formatDuration(elapsed)} note={shift?.startedAt ? 'Shift currently active' : shift?.signedOutAt ? 'Shift complete today' : 'Not clocked in yet'} tone="metric-green" /><Metric icon={Phone} label="Calls logged" value={`${called} / ${leads.length}`} note="Businesses contacted today" /><Metric icon={BadgeCheck} label="Interested leads" value={interested.length} note="Meetings to follow up" tone="metric-coral" /></div><section className="panel activity-panel"><div className="panel-heading"><div><div className="section-eyebrow">TODAY · {formatShortDate()}</div><h2>Interested businesses</h2></div><span className="count-chip">{interested.length} leads</span></div>{interested.length ? interested.map((lead) => <div className="activity-lead" key={lead.id}><span className="activity-check"><Check size={16} /></span><div><b>{lead.business}</b><small>{lead.contact} · {lead.phone}</small>{lead.notes && <p>{lead.notes}</p>}</div><StatusPill status={lead.status} /></div>) : <div className="empty-state">No interested leads yet. Keep going, your next good conversation is out there.</div>}</section><div className="activity-footnote"><Clock3 size={15} /> Shift totals reset each day and stay available in the browser’s saved records.</div></>;
-}
 function AdminOverview({ leads, shifts, now, onNavigate, staff, contacts = [], contactActivity = [] }) {
   const STAFF = staff;
   const called = leads.filter((lead) => lead.status !== 'pending').length;
   const interested = leads.filter((lead) => lead.status === 'interested');
   const liveStaff = STAFF.filter((person) => shifts[person.id]?.startedAt);
   const totalSeconds = STAFF.reduce((total, person) => { const shift = shifts[person.id]; return total + (shift ? shift.elapsed + (shift.startedAt ? Math.floor((now - new Date(shift.startedAt).getTime()) / 1000) : 0) : 0); }, 0);
-  const conversion = called ? Math.round(interested.length / called * 100) : 0;
   const submittedByStaff = Object.fromEntries(contactActivity.map((activity) => [activity.generatorId, activity.submitted]));
   return <>
     <PageHeading kicker={`${formatShortDate().toUpperCase()} · DAILY SUMMARY`} title="Team overview" description="Today’s attendance, call progress, and lead generation." action={<button className="primary-button" onClick={() => onNavigate('calls')}><CalendarDays size={15} /> Assign today’s calls</button>} />
@@ -711,7 +725,6 @@ function DailyCallsPage({ leads, contacts = [], onDeleteLead, onCheckDuplicates,
       setError(assignError.message);
       return;
     }
-    setPastedRows('');
     setReviewRows(null);
     setSelectedContactIds([]);
     setReviewDuplicates([]);
@@ -750,32 +763,6 @@ function DailyCallsPage({ leads, contacts = [], onDeleteLead, onCheckDuplicates,
     <section className="panel distribution-panel"><div className="panel-heading"><div><div className="section-eyebrow">TODAY’S DISTRIBUTION</div><h2>Calls per staff member</h2></div><span className="count-chip">{leads.length} total</span></div><div className="distribution-list">{totals.map((person) => <div className="distribution-row" key={person.id}><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><b>{person.count} calls</b></div>)}</div></section>
   </>;
 }
-function AddLeadsModal({ onClose, onAdd }) {
-  const [business, setBusiness] = useState('');
-  const [contact, setContact] = useState('');
-  const [phone, setPhone] = useState('');
-  const [category, setCategory] = useState('Local business');
-  const [location, setLocation] = useState('');
-  const [assignee, setAssignee] = useState('all');
-  const [bulk, setBulk] = useState('');
-  const [mode, setMode] = useState('single');
-  const [error, setError] = useState('');
-  const createLead = (row, staffId, index) => ({ id: `lead-${Date.now()}-${index}-${Math.random().toString(16).slice(2, 6)}`, business: row.business, contact: row.contact || 'Not provided', phone: row.phone, category: row.category || 'Local business', location: row.location || 'Not provided', website: row.website || 'No website', staffId, status: 'pending', notes: '' });
-  const submit = async (event) => {
-    event.preventDefault();
-    let rows = [];
-    if (mode === 'single') {
-      if (!business.trim() || !phone.trim()) { setError('Business name and phone number are required.'); return; }
-      rows = [{ business: business.trim(), contact: contact.trim(), phone: phone.trim(), category, location: location.trim() }];
-    } else {
-      rows = bulk.split('\n').map((line) => line.split(',').map((part) => part.trim())).filter((parts) => parts[0] && parts[1]).map(([name, number, person, type, place, website]) => ({ business: name, phone: number, contact: person, category: type, location: place, website }));
-      if (!rows.length) { setError('Add at least one valid row with a business name and phone number.'); return; }
-    }
-    const selected = assignee === 'all' ? STAFF : STAFF.filter((person) => person.id === assignee);
-    onAdd(rows.map((row, index) => createLead(row, selected[index % selected.length].id, index)));
-  };
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><form className="add-modal" onSubmit={submit}><div className="modal-head"><div><div className="section-eyebrow">GROW THE CALL LIST</div><h2>Add businesses</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={19} /></button></div><div className="modal-tabs"><button type="button" className={mode === 'single' ? 'selected' : ''} onClick={() => { setMode('single'); setError(''); }}>Single business</button><button type="button" className={mode === 'bulk' ? 'selected' : ''} onClick={() => { setMode('bulk'); setError(''); }}>Paste a list</button></div>{mode === 'single' ? <div className="form-grid"><label>Business name<input value={business} onChange={(event) => setBusiness(event.target.value)} placeholder="e.g. Cedar Street Cafe" /></label><label>Phone number<input value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+1 415 555 0100" /></label><label>Contact name <span>OPTIONAL</span><input value={contact} onChange={(event) => setContact(event.target.value)} placeholder="Owner or manager" /></label><label>Category<input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Restaurant, salon..." /></label><label className="full-field">Location <span>OPTIONAL</span><input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="City, State" /></label></div> : <><label className="bulk-label">One business per line, comma-separated: name, phone, contact, category, location, website<textarea rows="7" value={bulk} onChange={(event) => setBulk(event.target.value)} placeholder={'Cedar Street Cafe, +1 415 555 0100, Mina, Cafe, Oakland CA, No website\nHarbor Dental, +1 415 555 0102, Alex, Dental, Alameda CA, Facebook only'} /></label><p className="bulk-hint">Business name and phone are required; other fields are optional. Leads will be split evenly when assigned to everyone.</p></>}<label className="assign-label">Assign to<select value={assignee} onChange={(event) => setAssignee(event.target.value)}><option value="all">Distribute evenly across all agents</option>{STAFF.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label>{error && <p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button className="primary-button" type="submit"><Plus size={15} /> Add to call list</button></div></form></div>;
-}
 function TeamApprovals({ staff, onApprove, onDeny, onDelete, onRoleChange }) {
   const pending = staff.filter((person) => !person.approved);
   const approved = staff.filter((person) => person.approved);
@@ -812,7 +799,7 @@ function MyLeadsPage({ contacts }) {
   </>;
 }
 
-function ContactGenerator({ user, shift, elapsed, saved, onClockIn, onClockOut, onSave }) {
+function ContactGenerator({ user, shift, elapsed, saved = 0, onClockIn, onClockOut, onSave }) {
   const [pastedContacts, setPastedContacts] = useState('');
   const [area, setArea] = useState('');
   const [category, setCategory] = useState('');
@@ -830,8 +817,4 @@ function ContactGenerator({ user, shift, elapsed, saved, onClockIn, onClockOut, 
     setError('');
   };
   return <><PageHeading kicker={formatShortDate().toUpperCase()} title={`Find businesses, ${user.name.split(' ')[0]}.`} description="Search Maps, then paste multiple business names and phone numbers for admin approval." action={<span className={`shift-indicator ${clockedIn ? 'on' : ''}`}><i />{clockedIn ? 'Shift in progress' : 'Shift not started'}</span>} /><section className="generator-clock"><div><span>TIME TODAY</span><b>{formatDuration(elapsed)}</b></div><button className="primary-button" onClick={clockedIn ? onClockOut : onClockIn}>{clockedIn ? 'Clock out' : 'Clock in'}</button></section><section className="generator-layout"><div className="panel generator-form-panel"><div className="section-eyebrow">1 · SEARCH MAPS</div><h2>Find local businesses</h2><p>Search by business type and area. Use the map listings to collect business names and phone numbers.</p><div className="generator-fields"><label>Business type<input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="e.g. dentists, cafes" /></label><label>Area or city<input value={area} onChange={(event) => setArea(event.target.value)} placeholder="e.g. East Oakland" /></label></div><a className={`maps-search-link ${mapQuery ? '' : 'disabled'}`} href={mapQuery ? `https://www.google.com/maps/search/${encodeURIComponent(mapQuery)}` : undefined} target="_blank" rel="noreferrer" aria-disabled={!mapQuery}><Search size={15} /> Search Google Maps <ArrowUpRight size={14} /></a><div className="section-eyebrow capture-kicker">2 · ADD CONTACTS</div><form onSubmit={submit} className="generator-batch-form"><label className="generator-batch-label" htmlFor="generator-contacts">BUSINESS NAME, PHONE NUMBER<textarea id="generator-contacts" rows="8" value={pastedContacts} onChange={(event) => { setPastedContacts(event.target.value); setError(''); }} placeholder={'Northline Coffee, +1 415 555 0142\nMorrow Dental, +1 415 555 0176'} /></label><p className="bulk-hint">One business per line. You can paste two columns directly from a spreadsheet.</p>{error && <p className="form-error">{error}</p>}<button className="primary-button generator-save" type="submit"><Plus size={15} /> Submit leads for approval</button></form></div><aside className="generator-side"><div className="generator-count"><span>LEADS SUBMITTED TODAY</span><b>{saved}</b><small>Check approval status in My leads</small></div><div className="generator-tip"><MapPin size={17} /><b>Keep it simple</b><p>Only save business names and public phone numbers. Your admin will review and assign the calls.</p></div></aside></section></>;
-}
-
-function TeamView({ leads, shifts, now }) {
-  return <><PageHeading kicker="PEOPLE & TIME" title="Team & time" description="See who’s working, the time they’ve logged, and how their call list is moving." /><div className="team-cards">{STAFF.map((person) => { const assigned = leads.filter((lead) => lead.staffId === person.id); const called = assigned.filter((lead) => lead.status !== 'pending').length; const interested = assigned.filter((lead) => lead.status === 'interested'); const shift = shifts[keyForShift(person.id)]; const seconds = shift ? shift.elapsed + (shift.startedAt ? Math.floor((now - shift.startedAt) / 1000) : 0) : 0; return <article className="team-card" key={person.id}><div className="team-card-head"><div className="team-card-person"><Avatar person={person} /><div><h3>{person.name}</h3><small>{person.email}</small></div></div><span className={`shift-indicator ${shift?.startedAt ? 'on' : ''}`}><i />{shift?.startedAt ? 'On shift' : shift?.signedOutAt ? 'Finished' : 'Not started'}</span></div><div className="team-time-band"><span><Clock3 size={15} /> TIME LOGGED TODAY</span><b>{formatDuration(seconds)}</b><small>{shift?.startedAt ? `Clocked in ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(shift.startedAt)}` : shift?.signedOutAt ? `Clocked out ${new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(shift.signedOutAt)}` : 'No shift recorded today'}</small></div><div className="team-card-metrics"><div><span>CALLS</span><b>{called}<small> / {assigned.length}</small></b></div><div><span>INTERESTED</span><b className="positive-number">{interested.length}</b></div><div><span>REMAINING</span><b>{assigned.length - called}</b></div></div>{interested.length ? <div className="team-card-leads"><span className="section-eyebrow">NEEDS FOLLOW-UP</span>{interested.slice(0, 2).map((lead) => <div key={lead.id}><CheckCheck size={14} /><span><b>{lead.business}</b><small>{lead.contact} · {lead.phone}</small></span></div>)}</div> : <div className="team-no-leads">Interested leads will show here for follow-up.</div>}</article>; })}</div><div className="team-data-notice"><ShieldCheck size={16} /><span><b>Daily time tracking</b>Shift times are saved by work date in this browser. An active shift continues counting while this page is open.</span></div></>;
 }
