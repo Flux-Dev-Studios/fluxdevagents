@@ -33,7 +33,7 @@ export async function requireUser(req, res, next) {
   let rows;
   try {
     ({ rows } = await req.db.query(
-      'SELECT id, full_name, email, role, approved FROM staff_users WHERE id = $1',
+      'SELECT id, full_name, email, role, approved, active FROM staff_users WHERE id = $1',
       [payload.sub],
     ));
   } catch (error) {
@@ -41,7 +41,7 @@ export async function requireUser(req, res, next) {
   }
 
   const user = rows[0];
-  if (!user || !user.approved) {
+  if (!user || !user.approved || !user.active) {
     clearSession(res);
     return res.status(401).json({ error: 'Account is unavailable.' });
   }

@@ -52,7 +52,7 @@ Initialize the hosted database schema and admin account once using the provider'
 
 Before deploying lead activity tracking to an existing database, run `npm run db:migrate:lead-activity` once with `DATABASE_URL` configured locally. This adds an assignment timestamp and index without changing existing records or the admin password.
 
-For an existing database, run `npm run db:migrate:lead-submissions` after deploying this version. Unassigned existing leads and new submissions wait for admin approval; leads already assigned to call agents remain unchanged. Lead agents can check progress in **My leads**. Admins review submissions in **Today’s leads**, where contacts matching a previously approved business name or phone number are flagged and excluded from selection. New contacts are selected by default; admins can adjust the selection, delete unwanted leads, and approve only selected contacts to move them to **Today’s calls** for review and sharing with call agents.
+For an existing database, run `npm run db:migrate:lead-submissions` after deploying this version. Unassigned existing leads and new submissions wait for admin approval; leads already assigned to call agents remain unchanged. Lead agents can check progress in **My leads**. Admins review submissions in **Today’s leads**, where contacts matching a business name or phone number already shared with call agents are flagged and excluded from selection. Leads that were approved but not shared remain eligible for review. New contacts are selected by default; admins can adjust the selection, delete unwanted leads, and approve only selected contacts to move them to **Today’s calls** for review and sharing with call agents.
 
 ## Initial accounts
 
@@ -60,6 +60,8 @@ For an existing database, run `npm run db:migrate:lead-submissions` after deploy
 - New staff must register and be approved by the admin; no demo staff accounts are seeded.
 
 New signups are stored as unapproved accounts and cannot sign in until an admin approves them and chooses Call agent or Contact generator. Passwords are bcrypt-hashed, sessions use signed HttpOnly cookies, and role checks are enforced by the API.
+
+The API applies per-process limits to login and registration attempts. Serverless instances do not share these counters, so configure Vercel Firewall rate limits for `/api/auth/login` and `/api/auth/register` before public production use. PostgreSQL TLS certificate verification is enabled when `PGSSL=true`; use a database provider with a trusted certificate chain.
 
 Contact generators submit one or many businesses for admin review. Admins can add these to a daily batch, review/reorder the calls, and share them evenly among approved Call agents. Staff call outcomes, notes, and daily clock-in/out times are stored in PostgreSQL.
 

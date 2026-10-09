@@ -24,7 +24,7 @@ const apiRequest = async (path, options = {}) => {
     error.code = payload?.code;
     error.status = response.status;
     error.duplicates = payload?.duplicates || [];
-    error.previouslyApprovedIds = payload?.previouslyApprovedIds || [];
+    error.alreadySharedIds = payload?.alreadySharedIds || [];
     throw error;
   }
   return payload;
@@ -181,6 +181,13 @@ export default function App() {
       setToast('Staff role updated.');
     } catch (error) { setToast(error.message); }
   };
+  const setStaffActive = async (person, active) => {
+    try {
+      const { staff: updatedStaff } = await apiRequest(`/team/${person.id}/active`, { method: 'PATCH', body: JSON.stringify({ active }) });
+      setStaff((people) => people.map((item) => item.id === person.id ? updatedStaff : item));
+      setToast(active ? 'Staff account reactivated.' : 'Staff account deactivated.');
+    } catch (error) { setToast(error.message); }
+  };
   const approveContactSubmission = async (generatorId, contactIds) => {
     let result;
     try {
@@ -189,30 +196,30 @@ export default function App() {
         body: JSON.stringify({ contactIds }),
       });
     } catch (error) {
-      const duplicateIds = new Set(error.previouslyApprovedIds);
+      const duplicateIds = new Set(error.alreadySharedIds);
       if (duplicateIds.size) {
         setContactSubmissions((submissions) => submissions.map((submission) => submission.generatorId === generatorId
           ? {
             ...submission,
-            contacts: submission.contacts.map((contact) => duplicateIds.has(contact.id) ? { ...contact, previouslyApproved: true } : contact),
+            contacts: submission.contacts.map((contact) => duplicateIds.has(contact.id) ? { ...contact, alreadyShared: true } : contact),
           }
           : submission));
       }
       throw error;
     }
-    const { contacts, previouslyApprovedIds = [] } = result;
+    const { contacts, alreadySharedIds = [] } = result;
     const approvedIds = new Set(contacts.map((contact) => contact.id));
-    const duplicateIds = new Set(previouslyApprovedIds);
+    const duplicateIds = new Set(alreadySharedIds);
     setContactSubmissions((submissions) => submissions.flatMap((submission) => {
       if (submission.generatorId !== generatorId) return [submission];
       const remaining = submission.contacts
         .filter((contact) => !approvedIds.has(contact.id))
-        .map((contact) => duplicateIds.has(contact.id) ? { ...contact, previouslyApproved: true } : contact);
+        .map((contact) => duplicateIds.has(contact.id) ? { ...contact, alreadyShared: true } : contact);
       return remaining.length ? [{ ...submission, contacts: remaining, count: remaining.length }] : [];
     }));
     setContactPool((current) => [...current, ...contacts]);
-    const skippedCount = previouslyApprovedIds.length;
-    setToast(`${contacts.length} lead${contacts.length === 1 ? '' : 's'} approved${skippedCount ? `; ${skippedCount} previously approved lead${skippedCount === 1 ? ' was' : 's were'} excluded` : ''}.`);
+    const skippedCount = alreadySharedIds.length;
+    setToast(`${contacts.length} lead${contacts.length === 1 ? '' : 's'} approved${skippedCount ? `; ${skippedCount} already shared lead${skippedCount === 1 ? ' was' : 's were'} excluded` : ''}.`);
     return { approvedCount: contacts.length, skippedCount };
   };
   const deleteGeneratedContact = async (contact) => {
@@ -334,17 +341,17 @@ export default function App() {
       <header className="topbar"><button className="icon-button menu-toggle" ref={menuToggleRef} onClick={() => setMobileNav((isOpen) => !isOpen)} aria-label={mobileNav ? 'Close navigation' : 'Open navigation'} title={mobileNav ? 'Close navigation' : 'Open navigation'} aria-expanded={mobileNav} aria-controls="workspace-navigation"><img src="/flux-dev-logo.png" alt="" width="22" height="22" /></button><div className="breadcrumbs">{user.role === 'admin' ? 'Workspace / ' : 'My workspace / '}<b>{activePage === 'today' ? 'Today’s queue' : activePage === 'calls' ? 'Today’s calls' : activePage === 'leads' ? 'Today’s leads' : activePage === 'team' ? 'Team & approvals' : activePage === 'generate' ? 'Find contacts' : activePage === 'my-leads' ? 'My leads' : 'Overview'}</b></div><div className="topbar-right"><span className="top-date"><CalendarDays size={15} />{formatShortDate()}</span><span className="top-divider" /><span className="top-status"><i /> All systems normal</span><Avatar person={user} size="small" /></div></header>
       <div className="page-content">
         {user.role === 'call-agent' && activePage === 'today' && <StaffToday user={user} leads={staffLeads} shift={activeShift} elapsed={elapsed} onClockIn={clockIn} onClockOut={clockOut} onUpdate={updateLead} now={now} />}
-        {user.role === 'admin' && activePage === 'overview' && <AdminOverview leads={dailyCalls} shifts={shifts} now={now} onNavigate={setPage} staff={staff.filter((person) => person.approved)} contacts={contactPool} contactActivity={contactActivity} />}
+        {user.role === 'admin' && activePage === 'overview' && <AdminOverview leads={dailyCalls} shifts={shifts} now={now} onNavigate={setPage} staff={staff.filter((person) => person.approved && person.active !== false)} contacts={contactPool} contactActivity={contactActivity} />}
         {user.role === 'admin' && activePage === 'calls' && <DailyCallsPage
           leads={dailyCalls}
           contacts={contactPool}
-          staff={staff.filter((person) => person.approved && person.role === 'call-agent')}
+          staff={staff.filter((person) => person.approved && person.active !== false && person.role === 'call-agent')}
           onDeleteLead={deleteGeneratedContact}
           onCheckDuplicates={(calls, contactIds) => apiRequest('/calls/check-duplicates', { method: 'POST', body: JSON.stringify({ calls, contactIds }) })}
           onAssign={assignCalls}
         />}
         {user.role === 'admin' && activePage === 'leads' && <TodayLeadsPage submissions={contactSubmissions} onApproveSubmission={approveContactSubmission} onDeleteLead={deleteGeneratedContact} />}
-        {user.role === 'admin' && activePage === 'team' && <TeamApprovals staff={staff} onApprove={approveStaff} onDeny={denyStaff} onDelete={deleteStaff} onRoleChange={updateStaffRole} />}
+        {user.role === 'admin' && activePage === 'team' && <TeamApprovals staff={staff} onApprove={approveStaff} onDeny={denyStaff} onDelete={deleteStaff} onRoleChange={updateStaffRole} onSetActive={setStaffActive} />}
         {user.role === 'contact-generator' && activePage === 'generate' && <ContactGenerator user={user} shift={activeShift} elapsed={elapsed} saved={myContacts.length} onClockIn={clockIn} onClockOut={clockOut} onSave={saveContacts} />}
         {user.role === 'contact-generator' && activePage === 'my-leads' && <MyLeadsPage contacts={myContacts} />}
       </div>
@@ -450,10 +457,10 @@ function Login({ onLogin, onRegister, onClearMessage, serverMessage }) {
       <span className="form-kicker">{mode === 'login' ? 'WELCOME BACK' : 'REQUEST ACCESS'}</span>
       <h2>{mode === 'login' ? <>Sign in to<br />your workspace.</> : <>Join the<br />Flux Dev team.</>}</h2>
       <p className="form-intro">{mode === 'login' ? 'Pick up right where your best work happens.' : 'An admin must approve your account before sign-in.'}</p>
-      {mode === 'signup' && <><label htmlFor="signup-name">Full name</label><div className="input-wrap"><input id="signup-name" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} required /></div></>}
+      {mode === 'signup' && <><label htmlFor="signup-name">Full name</label><div className="input-wrap"><input id="signup-name" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} required maxLength={100} /></div></>}
       {mode === 'signup' && <><label htmlFor="signup-role">Role</label><RoleSelect id="signup-role" value={role} onChange={setRole} /></>}
-      <label htmlFor="email">Work email</label><div className="input-wrap"><span className="input-at">@</span><input id="email" type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required /></div>
-      <label htmlFor="password">Password</label><div className="input-wrap"><input id="password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={8} /><button type="button" className="show-password" onClick={() => { const input = document.getElementById('password'); input.type = input.type === 'password' ? 'text' : 'password'; }}>Show</button></div>
+      <label htmlFor="email">Work email</label><div className="input-wrap"><span className="input-at">@</span><input id="email" type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={254} /></div>
+      <label htmlFor="password">Password</label><div className="input-wrap"><input id="password" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} required minLength={mode === 'signup' ? 12 : 1} maxLength={72} /><button type="button" className="show-password" onClick={() => { const input = document.getElementById('password'); input.type = input.type === 'password' ? 'text' : 'password'; }}>Show</button></div>
       {(message || serverMessage) && <p className="login-message" role="status">{message || serverMessage}</p>}
       {mode === 'login' ? <button type="submit" className="primary-button login-submit" disabled={isSubmitting}>{isSubmitting ? 'Checking account…' : 'Sign in'} {!isSubmitting && <ArrowRight size={16} />}</button> : <button type="submit" className="primary-button login-submit" disabled={isSubmitting}>{isSubmitting ? 'Sending request…' : 'Request access'} {!isSubmitting && <ArrowRight size={16} />}</button>}
       <button type="button" className="login-mode-toggle" onClick={toggleMode} disabled={isSubmitting}>{mode === 'login' ? 'New to the team? Request an account' : 'Already approved? Sign in'}</button>
@@ -556,10 +563,10 @@ function TodayLeadsPage({ submissions, onApproveSubmission, onDeleteLead }) {
   }, []);
   const submittedLeadCount = agents.reduce((total, agent) => total + agent.count, 0);
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
-  const previouslyApprovedCount = selectedAgent?.contacts.filter((contact) => contact.previouslyApproved).length || 0;
-  const selectedContacts = selectedAgent?.contacts.filter((contact) => !contact.previouslyApproved && selectedContactIds.has(contact.id)) || [];
+  const alreadySharedCount = selectedAgent?.contacts.filter((contact) => contact.alreadyShared).length || 0;
+  const selectedContacts = selectedAgent?.contacts.filter((contact) => !contact.alreadyShared && selectedContactIds.has(contact.id)) || [];
   const selectAgent = (agent) => {
-    setSelectedContactIds(new Set(agent.contacts.filter((contact) => !contact.previouslyApproved).map((contact) => contact.id)));
+    setSelectedContactIds(new Set(agent.contacts.filter((contact) => !contact.alreadyShared).map((contact) => contact.id)));
     setSelectedAgentId(agent.id);
     setError('');
   };
@@ -595,12 +602,12 @@ function TodayLeadsPage({ submissions, onApproveSubmission, onDeleteLead }) {
           <div className="agent-leads-content" aria-label={`${selectedAgent.name} submitted leads`}>
             <div className="submission-lead-list">{selectedAgent.contacts.map((contact) => <div className="submission-lead-row" key={contact.id}>
               <b>{contact.business}</b><span>{contact.phone}</span><small>{[contact.category, contact.area].filter(Boolean).join(' · ') || 'No category or area added'}</small>
-              <label className={`lead-selection${contact.previouslyApproved ? ' is-duplicate' : ''}`}>
+              <label className={`lead-selection${contact.alreadyShared ? ' is-duplicate' : ''}`}>
                 <input
                   type="checkbox"
-                  aria-label={`${contact.previouslyApproved ? 'Previously approved duplicate' : 'Select'}: ${contact.business}`}
-                  checked={!contact.previouslyApproved && selectedContactIds.has(contact.id)}
-                  disabled={contact.previouslyApproved}
+                  aria-label={`${contact.alreadyShared ? 'Already shared duplicate' : 'Select'}: ${contact.business}`}
+                  checked={!contact.alreadyShared && selectedContactIds.has(contact.id)}
+                  disabled={contact.alreadyShared}
                   onChange={() => setSelectedContactIds((current) => {
                     const next = new Set(current);
                     if (next.has(contact.id)) next.delete(contact.id);
@@ -608,13 +615,13 @@ function TodayLeadsPage({ submissions, onApproveSubmission, onDeleteLead }) {
                     return next;
                   })}
                 />
-                {contact.previouslyApproved && <span>Previously approved</span>}
+                {contact.alreadyShared && <span>Already shared with call agents</span>}
               </label>
               <LeadActions contact={contact} onDelete={onDeleteLead} />
             </div>)}</div>
           </div>
           <div className="lead-review-selection">
-            <span>{selectedContacts.length} selected · {previouslyApprovedCount} previously approved excluded</span>
+            <span>{selectedContacts.length} selected · {alreadySharedCount} already shared excluded</span>
           </div>
           <div className="lead-agent-tab-footer">
             <span>{selectedContacts.length} selected lead{selectedContacts.length === 1 ? '' : 's'} will be added to Today’s calls</span>
@@ -763,10 +770,31 @@ function DailyCallsPage({ leads, contacts = [], onDeleteLead, onCheckDuplicates,
     <section className="panel distribution-panel"><div className="panel-heading"><div><div className="section-eyebrow">TODAY’S DISTRIBUTION</div><h2>Calls per staff member</h2></div><span className="count-chip">{leads.length} total</span></div><div className="distribution-list">{totals.map((person) => <div className="distribution-row" key={person.id}><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><b>{person.count} calls</b></div>)}</div></section>
   </>;
 }
-function TeamApprovals({ staff, onApprove, onDeny, onDelete, onRoleChange }) {
+function TeamApprovals({ staff, onApprove, onDeny, onDelete, onRoleChange, onSetActive }) {
   const pending = staff.filter((person) => !person.approved);
-  const approved = staff.filter((person) => person.approved);
-  return <><PageHeading kicker="ACCESS CONTROL" title="Team & approvals" description="Approve or deny signup requests, manage staff roles, and remove staff accounts." /><section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">WAITING FOR APPROVAL</div><h2>New account requests</h2></div><span className="count-chip">{pending.length} waiting</span></div>{pending.length ? pending.map((person) => <PendingApprovalRow key={person.id} person={person} onApprove={onApprove} onDeny={onDeny} />) : <div className="empty-state">No new account requests.</div>}</section><section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">APPROVED ACCOUNTS</div><h2>Staff roles</h2></div><span className="count-chip">{approved.length}</span></div>{approved.filter((person) => person.role !== 'admin').map((person) => <div className="approval-row" key={person.id}><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><RoleSelect id={`role-${person.id}`} ariaLabel={`Role for ${person.name}`} value={person.role} onChange={(role) => onRoleChange(person.id, role)} /><button className="secondary-button team-delete-button" type="button" onClick={() => onDelete(person)} aria-label={`Delete ${person.name}`} title="Delete staff account"><X size={14} /> Delete</button></div>)}</section></>;
+  const approved = staff.filter((person) => person.approved && person.active !== false && person.role !== 'admin');
+  const inactive = staff.filter((person) => person.approved && person.active === false && person.role !== 'admin');
+  const accountRow = (person, isActive) => <div className="approval-row approved-row" key={person.id}>
+    <div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div>
+    {isActive ? <RoleSelect id={`role-${person.id}`} ariaLabel={`Role for ${person.name}`} value={person.role} onChange={(role) => onRoleChange(person.id, role)} /> : <span className="inactive-account-label">Deactivated</span>}
+    <TeamAccountMenu person={person} active={isActive} onDelete={onDelete} onSetActive={onSetActive} />
+  </div>;
+  return <><PageHeading kicker="ACCESS CONTROL" title="Team & approvals" description="Approve or deny signup requests, manage staff roles, and remove staff accounts." />
+    <section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">WAITING FOR APPROVAL</div><h2>New account requests</h2></div><span className="count-chip">{pending.length} waiting</span></div>{pending.length ? pending.map((person) => <PendingApprovalRow key={person.id} person={person} onApprove={onApprove} onDeny={onDeny} />) : <div className="empty-state">No new account requests.</div>}</section>
+    <section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">ACTIVE ACCOUNTS</div><h2>Staff roles</h2></div><span className="count-chip">{approved.length}</span></div>{approved.length ? approved.map((person) => accountRow(person, true)) : <div className="empty-state">No active staff accounts.</div>}</section>
+    {inactive.length > 0 && <section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">INACTIVE ACCOUNTS</div><h2>Deactivated staff</h2></div><span className="count-chip">{inactive.length}</span></div>{inactive.map((person) => accountRow(person, false))}</section>}
+  </>;
+}
+
+function TeamAccountMenu({ person, active, onDelete, onSetActive }) {
+  const [isOpen, setIsOpen] = useState(false);
+  return <div className="team-account-actions">
+    <button type="button" className="icon-button team-menu-trigger" aria-label={`Actions for ${person.name}`} title="Account actions" aria-haspopup="menu" aria-expanded={isOpen} onClick={() => setIsOpen((open) => !open)}><MoreVertical size={17} /></button>
+    {isOpen && <div className="lead-menu-popover team-account-menu" role="menu">
+      <button type="button" role="menuitem" onClick={() => { setIsOpen(false); onSetActive(person, !active); }}>{active ? 'Deactivate' : 'Reactivate'}</button>
+      <button type="button" role="menuitem" onClick={() => { setIsOpen(false); onDelete(person); }}>Delete</button>
+    </div>}
+  </div>;
 }
 
 function PendingApprovalRow({ person, onApprove, onDeny }) {

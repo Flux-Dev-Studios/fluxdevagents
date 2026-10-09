@@ -12,6 +12,10 @@
   border-bottom: 1px solid #e7e8df;
 }
 
+.approval-row.approved-row {
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+}
+
 .approval-row:last-child {
   border-bottom: 0;
 }
@@ -28,8 +32,45 @@
   background: #ffede7;
 }
 
+.team-account-actions {
+  position: relative;
+  justify-self: end;
+}
+
+.team-menu-trigger {
+  width: 34px;
+  height: 34px;
+  color: #607187;
+}
+
+.team-menu-trigger:hover,
+.team-menu-trigger[aria-expanded='true'] {
+  background: #f0f4f8;
+}
+
+.team-account-menu {
+  min-width: 130px;
+}
+
+.team-account-menu button:first-child {
+  color: #395b78;
+}
+
+.team-account-menu button:first-child:hover {
+  background: #eef5fb;
+}
+
+.inactive-account-label {
+  color: #8491a0;
+  font-size: 10px;
+}
+
 @media (max-width: 700px) {
   .approval-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .approval-row.approved-row {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 

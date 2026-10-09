@@ -10,11 +10,12 @@
     "db:setup": "node backend/db/setup.mjs",
     "db:migrate:lead-activity": "node backend/db/migrate-lead-activity.mjs",
     "db:migrate:lead-submissions": "node backend/db/migrate-lead-submissions.mjs",
+    "db:migrate:staff-active": "node backend/db/migrate-staff-active.mjs",
     "build": "vite build --config frontend/vite.config.js",
     "preview": "vite preview --config frontend/vite.config.js --host 0.0.0.0"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
+    "@vitejs/plugin-react": "6.1.1",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "dotenv": "^16.4.7",
@@ -22,9 +23,9 @@
     "jsonwebtoken": "^9.0.2",
     "lucide-react": "^0.468.0",
     "pg": "^8.23.1",
-    "react": "latest",
-    "react-dom": "latest",
-    "vite": "latest"
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "vite": "8.3.1"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

@@ -24,7 +24,7 @@ if (!process.env.DATABASE_URL || !process.env.JWT_SECRET || !adminEmail || !admi
       if (createDatabase) {
         const adminUrl = new URL(targetUrl);
         adminUrl.pathname = '/postgres';
-        adminClient = new Client({ connectionString: adminUrl.toString(), ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : undefined });
+        adminClient = new Client({ connectionString: adminUrl.toString(), ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: true } : undefined });
         await adminClient.connect();
         const exists = await adminClient.query('SELECT 1 FROM pg_database WHERE datname = $1', [databaseName]);
         if (!exists.rowCount) await adminClient.query(`CREATE DATABASE "${databaseName}"`);
@@ -32,7 +32,7 @@ if (!process.env.DATABASE_URL || !process.env.JWT_SECRET || !adminEmail || !admi
         adminClient = undefined;
       }
 
-      databaseClient = new Client({ connectionString: targetUrl.toString(), ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : undefined });
+      databaseClient = new Client({ connectionString: targetUrl.toString(), ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: true } : undefined });
       await databaseClient.connect();
       const schema = await readFile(new URL('./schema.sql', import.meta.url), 'utf8');
       await databaseClient.query(schema);

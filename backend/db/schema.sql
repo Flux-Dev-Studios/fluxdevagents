@@ -5,8 +5,10 @@ CREATE TABLE IF NOT EXISTS staff_users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'call-agent' CHECK (role IN ('admin', 'call-agent', 'contact-generator')),
   approved BOOLEAN NOT NULL DEFAULT FALSE,
+  active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
 
 CREATE TABLE IF NOT EXISTS daily_calls (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

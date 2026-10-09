@@ -15,28 +15,57 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
 
 const app = express();
 const frontendBuild = resolve(dirname(fileURLToPath(import.meta.url)), '../../dist');
+app.disable('x-powered-by');
+app.set('trust proxy', process.env.VERCEL ? 1 : false);
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data:; connect-src 'self'");
+  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+  if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) req.body = {};
+  next();
+});
 app.use((req, res, next) => { req.db = pool; next(); });
 
-const publicUser = (user) => ({ id: user.id, name: user.full_name, email: user.email, role: user.role, approved: user.approved });
+const rateLimitBuckets = new Map();
+const createIpRateLimit = ({ windowMs, max }) => (req, res, next) => {
+  const now = Date.now();
+  const key = `${req.path}:${req.ip || req.socket.remoteAddress || 'unknown'}`;
+  let bucket = rateLimitBuckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    bucket = { count: 0, resetAt: now + windowMs };
+    rateLimitBuckets.set(key, bucket);
+  }
+  if (rateLimitBuckets.size > 5000) {
+    for (const [bucketKey, value] of rateLimitBuckets) if (value.resetAt <= now) rateLimitBuckets.delete(bucketKey);
+    while (rateLimitBuckets.size > 5000) rateLimitBuckets.delete(rateLimitBuckets.keys().next().value);
+  }
+  res.setHeader('RateLimit-Limit', String(max));
+  res.setHeader('RateLimit-Remaining', String(Math.max(0, max - bucket.count - 1)));
+  res.setHeader('RateLimit-Reset', String(Math.ceil(bucket.resetAt / 1000)));
+  if (bucket.count >= max) {
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))));
+    return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+  }
+  bucket.count += 1;
+  return next();
+};
+const loginRateLimit = createIpRateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+const registrationRateLimit = createIpRateLimit({ windowMs: 60 * 60 * 1000, max: 5 });
+
+const publicUser = (user) => ({ id: user.id, name: user.full_name, email: user.email, role: user.role, approved: user.approved, active: user.active });
 const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 const validRole = (role) => role === 'call-agent' || role === 'contact-generator';
-const previouslyApprovedContactSql = (contactAlias) => `(
-  EXISTS (
-    SELECT 1 FROM generated_contacts previous
-    WHERE previous.approved_at IS NOT NULL
-      AND previous.id <> ${contactAlias}.id
-      AND (
-        NULLIF(regexp_replace(previous.phone, '[^0-9]', '', 'g'), '') = NULLIF(regexp_replace(${contactAlias}.phone, '[^0-9]', '', 'g'), '')
-        OR NULLIF(regexp_replace(lower(previous.business_name), '[^[:alnum:]]', '', 'g'), '') = NULLIF(regexp_replace(lower(${contactAlias}.business_name), '[^[:alnum:]]', '', 'g'), '')
-      )
-  )
-  OR EXISTS (
-    SELECT 1 FROM daily_calls previous
-    WHERE NULLIF(regexp_replace(previous.phone, '[^0-9]', '', 'g'), '') = NULLIF(regexp_replace(${contactAlias}.phone, '[^0-9]', '', 'g'), '')
-       OR NULLIF(regexp_replace(lower(previous.business_name), '[^[:alnum:]]', '', 'g'), '') = NULLIF(regexp_replace(lower(${contactAlias}.business_name), '[^[:alnum:]]', '', 'g'), '')
-  )
+const alreadySharedContactSql = (contactAlias) => `EXISTS (
+  SELECT 1 FROM daily_calls shared_call
+  WHERE NULLIF(regexp_replace(shared_call.phone, '[^0-9]', '', 'g'), '') = NULLIF(regexp_replace(${contactAlias}.phone, '[^0-9]', '', 'g'), '')
+     OR NULLIF(regexp_replace(lower(shared_call.business_name), '[^[:alnum:]]', '', 'g'), '') = NULLIF(regexp_replace(lower(${contactAlias}.business_name), '[^[:alnum:]]', '', 'g'), '')
 )`;
 const findWorkspaceCallDuplicates = async (client, calls, contactIds = []) => {
   const [existingCalls, pendingContacts] = await Promise.all([
@@ -56,12 +85,17 @@ app.get('/api/health', asyncRoute(async (_req, res) => {
   res.json({ status: 'ok', database: 'connected' });
 }));
 
-app.post('/api/auth/register', asyncRoute(async (req, res) => {
+app.post('/api/auth/register', registrationRateLimit, asyncRoute(async (req, res) => {
   const name = String(req.body.name || '').trim();
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
   const role = String(req.body.role || '');
-  if (!name || !email || password.length < 8) return res.status(400).json({ error: 'Name, email, and a password of at least 8 characters are required.' });
+  if (!name || name.length > 100 || !email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Enter a valid work email and a name of no more than 100 characters.' });
+  }
+  if (password.length < 12 || Buffer.byteLength(password, 'utf8') > 72) {
+    return res.status(400).json({ error: 'Choose a password of at least 12 characters and no more than 72 UTF-8 bytes.' });
+  }
   if (!validRole(role)) return res.status(400).json({ error: 'Choose Call agent or Lead agent.' });
   const hash = await bcrypt.hash(password, 12);
   try {
@@ -77,13 +111,15 @@ app.post('/api/auth/register', asyncRoute(async (req, res) => {
   }
 }));
 
-app.post('/api/auth/login', asyncRoute(async (req, res) => {
+app.post('/api/auth/login', loginRateLimit, asyncRoute(async (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
+  if (email.length > 254 || Buffer.byteLength(password, 'utf8') > 72) return res.status(401).json({ error: 'Email or password was not recognized.' });
   const { rows } = await pool.query('SELECT * FROM staff_users WHERE email = $1', [email]);
   const user = rows[0];
   if (!user || !(await bcrypt.compare(password, user.password_hash))) return res.status(401).json({ error: 'Email or password was not recognized.' });
   if (!user.approved) return res.status(403).json({ code: 'pending', error: 'Your account is waiting for admin approval.' });
+  if (!user.active) return res.status(403).json({ code: 'inactive', error: 'This account has been deactivated. Contact your admin.' });
   createSession(res, user);
   return res.json({ user: publicUser(user) });
 }));
@@ -92,7 +128,6 @@ app.post('/api/auth/logout', (_req, res) => { clearSession(res); res.status(204)
 app.get('/api/auth/session', requireUser, (req, res) => res.json({ user: publicUser(req.user) }));
 
 app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
-  const day = String(req.query.day || 'CURRENT_DATE');
   const callsQuery = req.user.role === 'admin'
     ? `SELECT c.id, c.business_name AS business, c.phone, c.staff_id AS "staffId", c.status, c.notes, c.work_date AS "workDate"
       FROM daily_calls c WHERE c.work_date = CURRENT_DATE ORDER BY c.call_order`
@@ -100,7 +135,7 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
       FROM daily_calls c WHERE c.work_date = CURRENT_DATE AND c.staff_id = $1 ORDER BY c.call_order`;
   const callsPromise = req.user.role === 'admin' ? pool.query(callsQuery) : pool.query(callsQuery, [req.user.id]);
   const staffPromise = req.user.role === 'admin'
-    ? pool.query('SELECT id, full_name AS name, email, role, approved FROM staff_users WHERE role <> $1 ORDER BY created_at, full_name', ['admin'])
+    ? pool.query('SELECT id, full_name AS name, email, role, approved, active FROM staff_users WHERE role <> $1 ORDER BY created_at, full_name', ['admin'])
     : Promise.resolve({ rows: [] });
   const shiftPromise = req.user.role === 'admin'
     ? pool.query(`SELECT staff_id AS "staffId", elapsed_seconds AS elapsed, clocked_in_at AS "startedAt", signed_out_at AS "signedOutAt" FROM daily_shifts WHERE work_date = CURRENT_DATE`)
@@ -117,7 +152,7 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
               MIN(gc.created_at) AS "submittedAt", COUNT(*)::int AS count,
               json_agg(json_build_object(
                 'id', gc.id, 'business', gc.business_name, 'phone', gc.phone, 'area', gc.area, 'category', gc.category,
-                'previouslyApproved', ${previouslyApprovedContactSql('gc')}
+                'alreadyShared', ${alreadySharedContactSql('gc')}
               ) ORDER BY gc.created_at) AS contacts
        FROM generated_contacts gc
        JOIN staff_users su ON su.id = gc.generator_id
@@ -150,7 +185,7 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/team/pending', requireUser, requireAdmin, asyncRoute(async (_req, res) => {
-  const { rows } = await pool.query(`SELECT id, full_name AS name, email, role, approved FROM staff_users WHERE role <> 'admin' ORDER BY approved, created_at`);
+  const { rows } = await pool.query(`SELECT id, full_name AS name, email, role, approved, active FROM staff_users WHERE role <> 'admin' ORDER BY approved, created_at`);
   res.json({ staff: rows });
 }));
 app.get('/api/shifts/today', requireUser, requireAdmin, asyncRoute(async (_req, res) => {
@@ -163,7 +198,7 @@ app.get('/api/shifts/today', requireUser, requireAdmin, asyncRoute(async (_req, 
 app.patch('/api/team/:id/approval', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   const role = String(req.body.role || '');
   if (!validRole(role)) return res.status(400).json({ error: 'Choose Call agent or Lead agent.' });
-  const { rows } = await pool.query(`UPDATE staff_users SET role = $2, approved = TRUE WHERE id = $1 AND role <> 'admin' RETURNING id, full_name AS name, email, role, approved`, [req.params.id, role]);
+  const { rows } = await pool.query(`UPDATE staff_users SET role = $2, approved = TRUE WHERE id = $1 AND role <> 'admin' RETURNING id, full_name AS name, email, role, approved, active`, [req.params.id, role]);
   if (!rows[0]) return res.status(404).json({ error: 'Staff account not found.' });
   return res.json({ staff: rows[0] });
 }));
@@ -181,6 +216,16 @@ app.patch('/api/team/:id/role', requireUser, requireAdmin, asyncRoute(async (req
   const { rows } = await pool.query(`UPDATE staff_users SET role = $2 WHERE id = $1 AND approved = TRUE AND role <> 'admin' RETURNING id`, [req.params.id, role]);
   if (!rows[0]) return res.status(404).json({ error: 'Approved staff account not found.' });
   return res.json({ status: 'updated' });
+}));
+app.patch('/api/team/:id/active', requireUser, requireAdmin, asyncRoute(async (req, res) => {
+  if (typeof req.body.active !== 'boolean') return res.status(400).json({ error: 'Active must be true or false.' });
+  const { rows } = await pool.query(
+    `UPDATE staff_users SET active = $2 WHERE id = $1 AND approved = TRUE AND role <> 'admin'
+     RETURNING id, full_name AS name, email, role, approved, active`,
+    [req.params.id, req.body.active],
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Approved staff account not found.' });
+  return res.json({ staff: rows[0] });
 }));
 app.delete('/api/team/:id', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   const { rows } = await pool.query(
@@ -244,7 +289,7 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
       `SELECT current_contact.id::text AS id
        FROM generated_contacts current_contact
        WHERE current_contact.id = ANY($1::uuid[])
-         AND ${previouslyApprovedContactSql('current_contact')}`,
+         AND ${alreadySharedContactSql('current_contact')}`,
       [pendingIds],
     );
     const duplicateIds = duplicates.rows.map((contact) => contact.id);
@@ -262,11 +307,11 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
     await client.query('COMMIT');
     if (!approved.rows.length) {
       return res.status(409).json({
-        error: 'All selected leads were previously approved. Review the flagged leads and select different contacts.',
-        previouslyApprovedIds: duplicateIds,
+        error: 'All selected leads have already been shared with call agents. Review the flagged leads and select different contacts.',
+        alreadySharedIds: duplicateIds,
       });
     }
-    return res.json({ contacts: approved.rows, previouslyApprovedIds: duplicateIds });
+    return res.json({ contacts: approved.rows, alreadySharedIds: duplicateIds });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -313,7 +358,7 @@ app.post('/api/calls/assign', requireUser, requireAdmin, asyncRoute(async (req, 
       await client.query('ROLLBACK');
       return res.status(409).json({ code: 'duplicates', error: 'Remove duplicate entries before sharing calls.', duplicates });
     }
-    const agentRows = await client.query(`SELECT id FROM staff_users WHERE approved = TRUE AND role = 'call-agent' ORDER BY created_at, id`);
+    const agentRows = await client.query(`SELECT id FROM staff_users WHERE approved = TRUE AND active = TRUE AND role = 'call-agent' ORDER BY created_at, id`);
     if (!agentRows.rows.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Approve at least one Call agent before sharing calls.' }); }
     const countsResult = await client.query(`SELECT staff_id, COUNT(*)::int AS count FROM daily_calls WHERE work_date = CURRENT_DATE GROUP BY staff_id`);
     const counts = Object.fromEntries(agentRows.rows.map((agent) => [agent.id, 0]));
