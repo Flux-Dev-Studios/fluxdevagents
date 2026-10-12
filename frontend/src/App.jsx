@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, BadgeCheck,
-  BriefcaseBusiness, CalendarDays, Check, CheckCheck,
+  BriefcaseBusiness, CalendarDays, Check, CheckCheck, ChevronDown,
   Clock3, LayoutDashboard, LogOut, MapPin, MoreHorizontal, MoreVertical,
   Phone, Plus, Search, ShieldCheck, Timer, Users, X,
 } from 'lucide-react';
@@ -771,6 +771,7 @@ function DailyCallsPage({ leads, contacts = [], onDeleteLead, onCheckDuplicates,
   </>;
 }
 function TeamApprovals({ staff, onApprove, onDeny, onDelete, onRoleChange, onSetActive }) {
+  const [inactiveOpen, setInactiveOpen] = useState(false);
   const pending = staff.filter((person) => !person.approved);
   const approved = staff.filter((person) => person.approved && person.active !== false && person.role !== 'admin');
   const inactive = staff.filter((person) => person.approved && person.active === false && person.role !== 'admin');
@@ -782,7 +783,13 @@ function TeamApprovals({ staff, onApprove, onDeny, onDelete, onRoleChange, onSet
   return <><PageHeading kicker="ACCESS CONTROL" title="Team & approvals" description="Approve or deny signup requests, manage staff roles, and remove staff accounts." />
     <section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">WAITING FOR APPROVAL</div><h2>New account requests</h2></div><span className="count-chip">{pending.length} waiting</span></div>{pending.length ? pending.map((person) => <PendingApprovalRow key={person.id} person={person} onApprove={onApprove} onDeny={onDeny} />) : <div className="empty-state">No new account requests.</div>}</section>
     <section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">ACTIVE ACCOUNTS</div><h2>Staff roles</h2></div><span className="count-chip">{approved.length}</span></div>{approved.length ? approved.map((person) => accountRow(person, true)) : <div className="empty-state">No active staff accounts.</div>}</section>
-    {inactive.length > 0 && <section className="panel simple-team-panel"><div className="panel-heading"><div><div className="section-eyebrow">INACTIVE ACCOUNTS</div><h2>Deactivated staff</h2></div><span className="count-chip">{inactive.length}</span></div>{inactive.map((person) => accountRow(person, false))}</section>}
+    {inactive.length > 0 && <section className="panel simple-team-panel inactive-team-panel">
+      <button className="inactive-team-toggle" type="button" aria-expanded={inactiveOpen} onClick={() => setInactiveOpen((open) => !open)}>
+        <span><span className="section-eyebrow">INACTIVE ACCOUNTS</span><strong>Deactivated staff</strong></span>
+        <span className="inactive-team-toggle-meta"><span className="count-chip">{inactive.length}</span><ChevronDown size={17} className={inactiveOpen ? 'is-expanded' : ''} /></span>
+      </button>
+      {inactiveOpen && inactive.map((person) => accountRow(person, false))}
+    </section>}
   </>;
 }
 

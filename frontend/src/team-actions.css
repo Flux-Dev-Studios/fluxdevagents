@@ -65,6 +65,54 @@
   font-size: 10px;
 }
 
+.inactive-team-panel {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.inactive-team-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: #40566d;
+  text-align: left;
+  cursor: pointer;
+}
+
+.inactive-team-toggle > span:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.inactive-team-toggle strong {
+  font: 600 14px var(--display);
+}
+
+.inactive-team-toggle-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #76879a;
+}
+
+.inactive-team-toggle-meta svg {
+  transition: transform .18s ease;
+}
+
+.inactive-team-toggle-meta svg.is-expanded {
+  transform: rotate(180deg);
+}
+
+.inactive-team-toggle:focus-visible {
+  outline: 2px solid #7ba6cd;
+  outline-offset: 4px;
+}
+
 @media (max-width: 700px) {
   .approval-row {
     grid-template-columns: minmax(0, 1fr) auto;
