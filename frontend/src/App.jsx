@@ -236,7 +236,7 @@ export default function App() {
       }
       throw error;
     }
-    const { contacts, alreadySharedIds = [], duplicateIds: possibleDuplicateIds = [] } = result;
+    const { contacts, alreadySharedIds = [] } = result;
     const approvedIds = new Set(contacts.map((contact) => contact.id));
     const duplicateIds = new Set(alreadySharedIds);
     const possibleDuplicateSet = new Set(possibleDuplicateIds);
@@ -274,16 +274,14 @@ export default function App() {
       ? current.filter((contact) => !approvedIds.has(contact.id))
       : [...current, ...contacts]);
     const alreadySharedCount = new Set(alreadySharedIds).size;
-    const possibleDuplicateCount = [...new Set(possibleDuplicateIds)].filter((id) => !alreadySharedIds.includes(id)).length;
     const approvalText = calls.length
       ? `Approved ${contacts.length} lead${contacts.length === 1 ? '' : 's'} and shared ${calls.length} call${calls.length === 1 ? '' : 's'} evenly`
       : `Approved ${contacts.length} lead${contacts.length === 1 ? '' : 's'}; waiting for an active Call agent`;
-    const excludedText = [
+    const noticeText = [
       alreadySharedCount ? `${alreadySharedCount} previously shared lead${alreadySharedCount === 1 ? '' : 's'} sent again` : '',
-      possibleDuplicateCount ? `${possibleDuplicateCount} possible duplicate${possibleDuplicateCount === 1 ? '' : 's'} excluded` : '',
     ].filter(Boolean).join('; ');
-    setToast(`${approvalText}${excludedText ? `; ${excludedText}` : ''}.`);
-    return { approvedCount: contacts.length, sharedCount: calls.length, skippedCount: possibleDuplicateCount };
+    setToast(`${approvalText}${noticeText ? `; ${noticeText}` : ''}.`);
+    return { approvedCount: contacts.length, sharedCount: calls.length, skippedCount: 0 };
   };
   const deleteGeneratedContact = async (contact) => {
     try {
@@ -724,8 +722,8 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
   const alreadySharedCount = selectedAgent?.contacts.filter((contact) => contact.alreadyShared).length || 0;
   const possibleDuplicateCount = selectedAgent?.contacts.filter((contact) => contact.isDuplicate && !contact.alreadyShared).length || 0;
-  const selectableContacts = selectedAgent?.contacts.filter((contact) => !contact.isDuplicate || contact.alreadyShared) || [];
-  const selectedContacts = selectedAgent?.contacts.filter((contact) => (!contact.isDuplicate || contact.alreadyShared) && selectedContactIds.has(contact.id)) || [];
+  const selectableContacts = selectedAgent?.contacts || [];
+  const selectedContacts = selectedAgent?.contacts.filter((contact) => selectedContactIds.has(contact.id)) || [];
   const allSelectableSelected = selectableContacts.length > 0 && selectableContacts.every((contact) => selectedContactIds.has(contact.id));
   const selectAgent = (agent) => {
     setSelectedContactIds(new Set());
@@ -778,9 +776,8 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
               <label className={`lead-selection${contact.alreadyShared || contact.isDuplicate ? ' is-duplicate' : ''}`}>
                 <input
                   type="checkbox"
-                  aria-label={`${contact.alreadyShared ? 'Already shared; optional resend' : contact.isDuplicate ? 'Possible duplicate' : 'Select'}: ${contact.business}`}
-                  checked={(!contact.isDuplicate || contact.alreadyShared) && selectedContactIds.has(contact.id)}
-                  disabled={contact.isDuplicate && !contact.alreadyShared}
+                  aria-label={`${contact.alreadyShared ? 'Already shared; optional resend' : contact.isDuplicate ? 'Possible duplicate; selectable' : 'Select'}: ${contact.business}`}
+                  checked={selectedContactIds.has(contact.id)}
                   onChange={() => setSelectedContactIds((current) => {
                     const next = new Set(current);
                     if (next.has(contact.id)) next.delete(contact.id);
@@ -788,13 +785,13 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
                     return next;
                   })}
                 />
-                {contact.alreadyShared ? <span>Already shared · select to send again</span> : contact.isDuplicate && <span>Possible duplicate · delete to resolve</span>}
+                {contact.alreadyShared ? <span>Already shared · select to send again</span> : contact.isDuplicate && <span>Possible duplicate · selectable if approved</span>}
               </label>
               <LeadActions contact={contact} onDelete={onDeleteLead} />
             </div>)}</div>
           </div>
           <div className="lead-review-selection">
-            <span>{selectedContacts.length} selected · {alreadySharedCount} already shared · {possibleDuplicateCount} possible duplicates excluded</span>
+            <span>{selectedContacts.length} selected · {alreadySharedCount} already shared · {possibleDuplicateCount} possible duplicates flagged</span>
           </div>
           <div className="lead-agent-tab-footer">
             <span>{selectedContacts.length} selected leads will be shared evenly with active call agents</span>

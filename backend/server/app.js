@@ -507,27 +507,8 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
       [pendingIds],
     );
     const alreadySharedIds = alreadyShared.rows.map((contact) => contact.id);
-    const duplicates = await client.query(
-      `SELECT current_contact.id::text AS id
-       FROM generated_contacts current_contact
-       WHERE current_contact.id = ANY($1::uuid[])
-         AND NOT ${alreadySharedContactSql('current_contact')}
-         AND EXISTS (
-           SELECT 1 FROM generated_contacts other_contact
-           WHERE other_contact.id <> current_contact.id
-             AND (
-               (NULLIF(regexp_replace(other_contact.phone, '[^0-9]', '', 'g'), '') IS NOT NULL
-                 AND NULLIF(regexp_replace(other_contact.phone, '[^0-9]', '', 'g'), '') = NULLIF(regexp_replace(current_contact.phone, '[^0-9]', '', 'g'), ''))
-               OR
-               (NULLIF(regexp_replace(lower(other_contact.business_name), '[^[:alnum:]]', '', 'g'), '') IS NOT NULL
-                 AND NULLIF(regexp_replace(lower(other_contact.business_name), '[^[:alnum:]]', '', 'g'), '') = NULLIF(regexp_replace(lower(current_contact.business_name), '[^[:alnum:]]', '', 'g'), ''))
-             )
-         )`,
-      [pendingIds],
-    );
-    const duplicateIds = duplicates.rows.map((contact) => contact.id);
-    const excludedIds = new Set(duplicateIds);
-    const eligibleIds = pendingIds.filter((id) => !excludedIds.has(id));
+    const duplicateIds = [];
+    const eligibleIds = pendingIds;
     const approved = eligibleIds.length
       ? await client.query(
         `UPDATE generated_contacts
@@ -545,7 +526,7 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
     await client.query('COMMIT');
     if (!approved.rows.length) {
       return res.status(409).json({
-        error: 'No selected leads could be approved. Review the flagged duplicates.',
+        error: 'No selected leads could be approved. They may no longer be pending review.',
         alreadySharedIds,
         duplicateIds,
       });
