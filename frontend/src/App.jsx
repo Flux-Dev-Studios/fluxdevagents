@@ -375,7 +375,14 @@ export default function App() {
         setContactSubmissions(data.contactSubmissions || []);
         setContactActivity(data.contactActivity || []);
       }).catch((error) => {
-        if (isCurrent) setToast(`Lead activity could not be refreshed: ${error.message}`);
+        if (!isCurrent) return;
+        if (error.status === 401) {
+          setToast('');
+          setApiError('Your session is no longer active. Please sign in again to see lead updates.');
+          setUser(null);
+          return;
+        }
+        setToast(`Lead activity could not be refreshed: ${error.message}`);
       });
     };
     refreshShifts();
