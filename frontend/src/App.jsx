@@ -821,7 +821,7 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
   </>;
 }
 
-function LeadActions({ contact, onDelete }) {
+function LeadActions({ contact, onDelete, onEdit }) {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef(null);
   useEffect(() => {
@@ -838,7 +838,10 @@ function LeadActions({ contact, onDelete }) {
   }, [isOpen]);
   return <div className="lead-actions-menu" ref={menuRef}>
     <button className="icon-button lead-menu-trigger" type="button" aria-label={`Actions for ${contact.business}`} aria-haspopup="menu" aria-expanded={isOpen} onClick={() => setIsOpen((open) => !open)}><MoreVertical size={17} /></button>
-    {isOpen && <div className="lead-menu-popover" role="menu"><button type="button" role="menuitem" onClick={() => { setIsOpen(false); onDelete(contact); }}>Delete</button></div>}
+    {isOpen && <div className="lead-menu-popover" role="menu">
+      {onEdit && <button type="button" role="menuitem" onClick={() => { setIsOpen(false); onEdit(contact); }}>Edit</button>}
+      <button type="button" role="menuitem" data-danger="true" onClick={() => { setIsOpen(false); onDelete(contact); }}>Delete</button>
+    </div>}
   </div>;
 }
 
@@ -859,7 +862,7 @@ function ReportSheetMenu({ onDelete, disabled }) {
   }, [isOpen]);
   return <div className="lead-actions-menu" ref={menuRef}>
     <button className="icon-button lead-menu-trigger" type="button" aria-label="Report sheet actions" aria-haspopup="menu" aria-expanded={isOpen} disabled={disabled} onClick={() => setIsOpen((open) => !open)}><MoreVertical size={17} /></button>
-    {isOpen && <div className="lead-menu-popover" role="menu"><button type="button" role="menuitem" onClick={() => { setIsOpen(false); onDelete(); }}>Delete sheet</button></div>}
+    {isOpen && <div className="lead-menu-popover" role="menu"><button type="button" role="menuitem" data-danger="true" onClick={() => { setIsOpen(false); onDelete(); }}>Delete sheet</button></div>}
   </div>;
 }
 
@@ -982,7 +985,10 @@ function DailyCallsPage({ leads, contacts = [], onDeleteLead, onEditLead, onChec
     </section>}
     <section className="panel distribution-panel"><div className="panel-heading"><div><div className="section-eyebrow">TODAY’S DISTRIBUTION</div><h2>Calls per staff member</h2></div><span className="count-chip">{leads.length} total</span></div><div className="distribution-list">{totals.map((person) => <div className="distribution-row" key={person.id}><div className="team-person"><Avatar person={person} /><span><b>{person.name}</b><small>{person.email}</small></span></div><b>{person.count} calls</b></div>)}</div></section>
     <section className="panel distribution-panel"><div className="panel-heading"><div><div className="section-eyebrow">SHARED CONTACTS</div><h2>Leads sent to call agents</h2></div><span className="count-chip">{leads.filter((lead) => lead.sourceContactId).length} leads</span></div>
-      {leads.some((lead) => lead.sourceContactId) ? <div className="distribution-list">{leads.filter((lead) => lead.sourceContactId).map((lead) => <AdminSharedLead key={lead.sourceContactId} lead={lead} onEdit={onEditLead} onDelete={onDeleteLead} />)}</div> : <div className="empty-state">No submitted contacts have been shared today.</div>}
+      <details className="shared-contacts-disclosure">
+        <summary><span>View shared contacts</span><small>{leads.filter((lead) => lead.sourceContactId).length} contacts</small><ChevronDown size={16} aria-hidden="true" /></summary>
+        {leads.some((lead) => lead.sourceContactId) ? <div className="distribution-list shared-contacts-list">{leads.filter((lead) => lead.sourceContactId).map((lead) => <AdminSharedLead key={lead.sourceContactId} lead={lead} onEdit={onEditLead} onDelete={onDeleteLead} />)}</div> : <div className="empty-state">No submitted contacts have been shared today.</div>}
+      </details>
     </section>
   </>;
 }
@@ -1004,8 +1010,12 @@ function AdminSharedLead({ lead, onEdit, onDelete }) {
     if (!window.confirm(`Delete ${lead.business}? This removes the lead from the call agents’ queues.`)) return;
     await onDelete({ id: lead.sourceContactId, business: lead.business });
   };
+  const startEdit = () => {
+    setForm({ business: lead.business, phone: lead.phone, area: lead.area || '', category: lead.category || '' });
+    setEditing(true);
+  };
   return <>
-    <div className="distribution-row shared-lead-row"><div><b>{lead.business}</b><small>{lead.phone}</small></div><div className="shared-lead-actions"><button className="secondary-button" type="button" onClick={() => { setForm({ business: lead.business, phone: lead.phone, area: lead.area || '', category: lead.category || '' }); setEditing(true); }}><Pencil size={13} /> Edit</button><button className="my-lead-delete" type="button" onClick={remove}><Trash2 size={13} /> Delete</button></div></div>
+    <div className="distribution-row shared-lead-row"><div><b>{lead.business}</b><small>{lead.phone}</small></div><LeadActions contact={lead} onEdit={startEdit} onDelete={remove} /></div>
     {editing && <div className="modal-backdrop" role="presentation"><section className="add-modal contact-edit-modal" role="dialog" aria-modal="true" aria-labelledby={`shared-lead-${lead.sourceContactId}`}><div className="modal-head"><div><div className="section-eyebrow">SHARED LEAD</div><h2 id={`shared-lead-${lead.sourceContactId}`}>Edit contact</h2></div><button className="icon-button" type="button" aria-label="Close edit contact" onClick={() => setEditing(false)}><X size={17} /></button></div><form onSubmit={submit}><div className="form-grid"><label className="full-field">Business name<input maxLength={200} required value={form.business} onChange={(event) => setForm((current) => ({ ...current, business: event.target.value }))} /></label><label>Phone number<input maxLength={80} required value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} /></label><label>Business type<input maxLength={120} value={form.category} onChange={(event) => setForm((current) => ({ ...current, category: event.target.value }))} /></label><label className="full-field">Area<input maxLength={160} value={form.area} onChange={(event) => setForm((current) => ({ ...current, area: event.target.value }))} /></label></div>{error && <p className="form-error" role="alert">{error}</p>}<div className="modal-actions"><button className="secondary-button" type="button" disabled={saving} onClick={() => setEditing(false)}>Cancel</button><button className="primary-button" type="submit" disabled={saving}><Save size={14} />{saving ? 'Saving…' : 'Save changes'}</button></div></form></section></div>}
   </>;
 }
@@ -1241,7 +1251,7 @@ function TeamAccountMenu({ person, active, onDelete, onSetActive }) {
     <button type="button" className="icon-button team-menu-trigger" aria-label={`Actions for ${person.name}`} title="Account actions" aria-haspopup="menu" aria-expanded={isOpen} onClick={() => setIsOpen((open) => !open)}><MoreVertical size={17} /></button>
     {isOpen && <div className="lead-menu-popover team-account-menu" role="menu">
       <button type="button" role="menuitem" onClick={() => { setIsOpen(false); onSetActive(person, !active); }}>{active ? 'Deactivate' : 'Reactivate'}</button>
-      <button type="button" role="menuitem" onClick={() => { setIsOpen(false); onDelete(person); }}>Delete</button>
+      <button type="button" role="menuitem" data-danger="true" onClick={() => { setIsOpen(false); onDelete(person); }}>Delete</button>
     </div>}
   </div>;
 }
