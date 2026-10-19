@@ -417,8 +417,12 @@ export default function App() {
       }).catch(() => {});
     };
     const refreshLeadActivity = () => {
+      const requestSequence = ++callsRefreshSequence.current;
       apiRequest('/bootstrap').then((data) => {
         if (!isCurrent) return;
+        setStaff(data.staff || []);
+        setShifts(Object.fromEntries((data.shifts || []).map((shift) => [shift.staffId, shift])));
+        if (callsRefreshSequence.current === requestSequence) setLeads(data.calls || []);
         setContactPool(data.contacts || []);
         setContactSubmissions(data.contactSubmissions || []);
         setSavedLeads(data.savedLeads || []);
