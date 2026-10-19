@@ -869,10 +869,12 @@ function DailyCallsPage({ leads, contacts = [], onDeleteLead, onEditLead, onChec
   const [reviewDuplicates, setReviewDuplicates] = useState([]);
   const [duplicateCheckState, setDuplicateCheckState] = useState('unchecked');
   const [error, setError] = useState('');
+  const duplicateCheckSequence = useRef(0);
   const isCheckingDuplicates = duplicateCheckState === 'checking';
   const approvedContactKey = contacts.map((contact) => contact.id).join('|');
 
   const checkAndStageRows = async (rows, contactIds) => {
+    const requestSequence = ++duplicateCheckSequence.current;
     if (!rows.length) {
       setReviewRows(null);
       setReviewDuplicates([]);
@@ -885,9 +887,11 @@ function DailyCallsPage({ leads, contacts = [], onDeleteLead, onEditLead, onChec
     setError('');
     try {
       const { duplicates } = await onCheckDuplicates(rows.map(({ id, business, phone }) => ({ id, business, phone })), contactIds);
+      if (duplicateCheckSequence.current !== requestSequence) return;
       setReviewDuplicates(duplicates || []);
       setDuplicateCheckState('complete');
     } catch (checkError) {
+      if (duplicateCheckSequence.current !== requestSequence) return;
       setDuplicateCheckState('error');
       setError(checkError.message);
     }

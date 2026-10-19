@@ -16,7 +16,7 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
 const app = express();
 const frontendBuild = resolve(dirname(fileURLToPath(import.meta.url)), '../../dist');
 app.disable('x-powered-by');
-app.set('trust proxy', process.env.VERCEL ? 1 : false);
+app.set('trust proxy', process.env.VERCEL || process.env.RENDER === 'true' ? 1 : false);
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 app.use((req, res, next) => {

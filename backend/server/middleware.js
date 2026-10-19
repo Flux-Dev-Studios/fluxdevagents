@@ -4,7 +4,7 @@ const cookieName = 'flux_session';
 const cookieOptions = () => ({
   httpOnly: true,
   sameSite: 'lax',
-  secure: process.env.NODE_ENV === 'production',
+  secure: process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL) || process.env.RENDER === 'true',
   path: '/',
   maxAge: 7 * 24 * 60 * 60 * 1000,
 });
