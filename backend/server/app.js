@@ -89,11 +89,26 @@ async function distributeApprovedContacts(client, contactIds = null) {
   if (!agents.length) return [];
 
   const pending = await client.query(
-    `SELECT id, business_name AS business, phone
-     FROM generated_contacts
-     WHERE work_date = CURRENT_DATE AND approved_at IS NOT NULL AND assigned_at IS NULL
-       AND ($1::uuid[] IS NULL OR id = ANY($1::uuid[]))
-     ORDER BY created_at, id FOR UPDATE`,
+    `SELECT gc.id, gc.business_name AS business, gc.phone,
+            (SELECT pending_call.id FROM daily_calls pending_call
+             WHERE pending_call.source_contact_id = gc.id AND pending_call.work_date = gc.work_date
+               AND pending_call.status = 'pending'
+             ORDER BY pending_call.call_order LIMIT 1) AS "existingCallId"
+     FROM generated_contacts gc
+     WHERE gc.work_date = CURRENT_DATE AND gc.approved_at IS NOT NULL
+       AND ($1::uuid[] IS NULL OR gc.id = ANY($1::uuid[]))
+       AND NOT EXISTS (
+         SELECT 1 FROM daily_calls assigned_call
+         JOIN staff_users assigned_agent ON assigned_agent.id = assigned_call.staff_id
+         WHERE assigned_call.source_contact_id = gc.id AND assigned_call.work_date = gc.work_date
+           AND assigned_agent.approved = TRUE AND assigned_agent.active = TRUE AND assigned_agent.role = 'call-agent'
+       )
+       AND (
+         NOT EXISTS (SELECT 1 FROM daily_calls any_call WHERE any_call.source_contact_id = gc.id AND any_call.work_date = gc.work_date)
+         OR EXISTS (SELECT 1 FROM daily_calls pending_call
+                    WHERE pending_call.source_contact_id = gc.id AND pending_call.work_date = gc.work_date AND pending_call.status = 'pending')
+       )
+     ORDER BY gc.created_at, gc.id FOR UPDATE OF gc`,
     [contactIds],
   );
   if (!pending.rows.length) return [];
@@ -109,18 +124,25 @@ async function distributeApprovedContacts(client, contactIds = null) {
   const calls = [];
   for (const contact of pending.rows) {
     const agent = agents.reduce((lowest, candidate) => counts[candidate.id] < counts[lowest.id] ? candidate : lowest, agents[0]);
-    const { rows } = await client.query(
-      `INSERT INTO daily_calls (business_name, phone, staff_id, source_contact_id)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, source_contact_id AS "sourceContactId", business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"`,
-      [contact.business, contact.phone, agent.id, contact.id],
-    );
+    const { rows } = contact.existingCallId
+      ? await client.query(
+        `UPDATE daily_calls SET business_name = $2, phone = $3, staff_id = $4
+         WHERE id = $1
+         RETURNING id, source_contact_id AS "sourceContactId", business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"`,
+        [contact.existingCallId, contact.business, contact.phone, agent.id],
+      )
+      : await client.query(
+        `INSERT INTO daily_calls (business_name, phone, staff_id, source_contact_id)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, source_contact_id AS "sourceContactId", business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"`,
+        [contact.business, contact.phone, agent.id, contact.id],
+      );
     calls.push(rows[0]);
     counts[agent.id] += 1;
   }
   await client.query(
     `UPDATE generated_contacts SET assigned_at = NOW()
-     WHERE id = ANY($1::uuid[]) AND approved_at IS NOT NULL AND assigned_at IS NULL`,
+     WHERE id = ANY($1::uuid[]) AND approved_at IS NOT NULL`,
     [pending.rows.map(({ id }) => id)],
   );
   return calls;
