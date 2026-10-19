@@ -357,7 +357,7 @@ app.post('/api/contacts/batch', requireUser, requireRole('contact-generator'), a
     })).filter((contact) => contact.business && contact.phone);
     if (!candidates.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'No valid business and phone pairs found.' }); }
     const { rows: savedContacts } = await client.query(`SELECT id::text AS id, business_name AS business, phone FROM generated_contacts`);
-    const duplicates = findCallDuplicates(savedContacts.rows, candidates).map(({ rowId, reason }) => ({
+    const duplicates = findCallDuplicates(savedContacts, candidates).map(({ rowId, reason }) => ({
       rowId, business: candidates.find((contact) => contact.id === String(rowId))?.business || '', reason,
     }));
     const duplicateIds = new Set(duplicates.map((duplicate) => String(duplicate.rowId)));
