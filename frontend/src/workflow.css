@@ -1,5 +1,6 @@
 .submission-approval-panel,
-.my-leads-panel {
+.my-leads-panel,
+.saved-leads-panel {
   padding: 18px;
   margin-bottom: 14px;
 }
@@ -90,6 +91,51 @@
 
 .lead-agent-card > svg {
   color: var(--muted);
+}
+
+.saved-leads-list {
+  display: grid;
+}
+
+.saved-lead-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, 220px) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 58px;
+  padding: 9px 2px;
+  border-top: 1px solid var(--line);
+}
+
+.saved-lead-business,
+.saved-lead-agent {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.saved-lead-business b,
+.saved-lead-agent b {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-lead-business small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.saved-lead-agent > span {
+  color: var(--muted);
+  font: 8px var(--mono);
+  letter-spacing: .45px;
+}
+
+.saved-lead-status {
+  justify-self: end;
 }
 
 .lead-agent-tab {
@@ -333,8 +379,22 @@
 
 @media (max-width: 620px) {
   .submission-approval-panel,
-  .my-leads-panel {
+  .my-leads-panel,
+  .saved-leads-panel {
     padding: 14px;
+  }
+
+  .saved-lead-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .saved-lead-agent {
+    grid-column: 1;
+  }
+
+  .saved-lead-status {
+    grid-column: 2;
+    grid-row: 1 / span 2;
   }
 
   .submission-card-heading,

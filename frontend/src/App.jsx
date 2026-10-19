@@ -73,6 +73,7 @@ export default function App() {
   const [leads, setLeads] = useState([]);
   const [contactPool, setContactPool] = useState([]);
   const [contactSubmissions, setContactSubmissions] = useState([]);
+  const [savedLeads, setSavedLeads] = useState([]);
   const [myContacts, setMyContacts] = useState([]);
   const [contactActivity, setContactActivity] = useState([]);
   const [shifts, setShifts] = useState({});
@@ -94,6 +95,7 @@ export default function App() {
     setLeads(data.calls || []);
     setContactPool(data.contacts || []);
     setContactSubmissions(data.contactSubmissions || []);
+    setSavedLeads(data.savedLeads || []);
     setMyContacts(data.myContacts || []);
     setContactActivity(data.contactActivity || []);
     setShifts(Object.fromEntries((data.shifts || []).map((shift) => [shift.staffId, shift])));
@@ -250,6 +252,23 @@ export default function App() {
       return remaining.length ? [{ ...submission, contacts: remaining, count: remaining.length }] : [];
     }));
     const calls = result.calls || [];
+    const approvedContacts = [...contacts, ...contactPool];
+    const newlySavedLeads = calls.flatMap((call) => {
+      const contact = approvedContacts.find((item) => item.id === call.sourceContactId);
+      if (!contact) return [];
+      return [{
+        ...contact,
+        ...call,
+        id: contact.id,
+        callId: call.id,
+        sourceContactId: contact.id,
+        assignedAt: new Date().toISOString(),
+        agentName: staff.find((person) => person.id === call.staffId)?.name || 'Call agent',
+      }];
+    });
+    if (newlySavedLeads.length) {
+      setSavedLeads((current) => [...newlySavedLeads, ...current.filter((item) => !newlySavedLeads.some((saved) => saved.id === item.id))]);
+    }
     setLeads((current) => [...current, ...calls.filter((call) => !current.some((item) => item.id === call.id))]);
     setContactPool((current) => calls.length
       ? current.filter((contact) => !approvedIds.has(contact.id))
@@ -275,6 +294,7 @@ export default function App() {
         return { ...submission, contacts: remaining, count: remaining.length };
       }).filter((submission) => submission.count > 0));
       setContactPool((current) => current.filter((item) => item.id !== contact.id));
+      setSavedLeads((current) => current.filter((item) => item.id !== contact.id));
       setLeads((current) => current.filter((item) => item.sourceContactId !== contact.id));
       setContactActivity((activity) => activity.map((item) => item.generatorId === contact.generatorId
         ? { ...item, submitted: Math.max(0, item.submitted - 1) }
@@ -292,6 +312,7 @@ export default function App() {
     });
     setLeads((current) => current.map((item) => item.sourceContactId === contact.id ? { ...item, business: updated.business, phone: updated.phone } : item));
     setContactPool((current) => current.map((item) => item.id === contact.id ? { ...item, ...updated } : item));
+    setSavedLeads((current) => current.map((item) => item.id === contact.id ? { ...item, ...updated } : item));
     setToast(`Updated ${updated.business}.`);
   };
   const saveContacts = async (contacts) => {
@@ -329,6 +350,12 @@ export default function App() {
     const result = await apiRequest('/calls/assign', { method: 'POST', body: JSON.stringify({ calls: newCalls, contactIds }) });
     setLeads((current) => [...current, ...result.calls]);
     setContactPool((current) => current.filter((contact) => !contactIds.includes(contact.id)));
+    const saved = result.calls.flatMap((call) => {
+      const contact = contactPool.find((item) => item.id === call.sourceContactId);
+      if (!contact) return [];
+      return [{ ...contact, ...call, id: contact.id, callId: call.id, sourceContactId: contact.id, assignedAt: new Date().toISOString(), agentName: staff.find((person) => person.id === call.staffId)?.name || 'Call agent' }];
+    });
+    if (saved.length) setSavedLeads((current) => [...saved, ...current.filter((item) => !saved.some((newItem) => newItem.id === item.id))]);
     setToast(`${result.calls.length} calls shared across the team.`);
   };
   const signOut = () => setShowLogoutConfirm(true);
@@ -336,7 +363,7 @@ export default function App() {
     if (isLoggingOut) return;
     setIsLoggingOut(true);
     await apiRequest('/auth/logout', { method: 'POST' }).catch(() => {});
-    setUser(null); setStaff([]); setLeads([]); setContactPool([]); setContactSubmissions([]); setMyContacts([]); setContactActivity([]); setShifts({}); setMobileNav(false); setApiError('');
+    setUser(null); setStaff([]); setLeads([]); setContactPool([]); setContactSubmissions([]); setSavedLeads([]); setMyContacts([]); setContactActivity([]); setShifts({}); setMobileNav(false); setApiError('');
     setShowLogoutConfirm(false);
     setIsLoggingOut(false);
   };
@@ -390,6 +417,7 @@ export default function App() {
         if (!isCurrent) return;
         setContactPool(data.contacts || []);
         setContactSubmissions(data.contactSubmissions || []);
+        setSavedLeads(data.savedLeads || []);
         setContactActivity(data.contactActivity || []);
       }).catch((error) => {
         if (!isCurrent) return;
@@ -479,7 +507,7 @@ export default function App() {
           onCheckDuplicates={(calls, contactIds) => apiRequest('/calls/check-duplicates', { method: 'POST', body: JSON.stringify({ calls, contactIds }) })}
           onAssign={assignCalls}
         />}
-        {user.role === 'admin' && activePage === 'leads' && <TodayLeadsPage submissions={contactSubmissions} onApproveSubmission={approveContactSubmission} onDeleteLead={deleteGeneratedContact} />}
+        {user.role === 'admin' && activePage === 'leads' && <TodayLeadsPage submissions={contactSubmissions} savedLeads={savedLeads} onApproveSubmission={approveContactSubmission} onDeleteLead={deleteGeneratedContact} />}
         {user.role === 'admin' && activePage === 'reports' && <AdminReportsPage />}
         {user.role === 'admin' && activePage === 'team' && <TeamApprovals staff={staff} onApprove={approveStaff} onDeny={denyStaff} onDelete={deleteStaff} onRoleChange={updateStaffRole} onSetActive={setStaffActive} />}
         {user.role === 'contact-generator' && activePage === 'generate' && <ContactGenerator user={user} shift={activeShift} elapsed={elapsed} saved={myContacts.length} onClockIn={clockIn} onClockOut={clockOut} onSave={saveContacts} />}
@@ -666,7 +694,7 @@ function AdminOverview({ leads, shifts, now, onNavigate, staff, contacts = [], c
     <p className="local-data-note"><Clock3 size={14} /> Total team time today: {formatDuration(totalSeconds)}</p>
   </>;
 }
-function TodayLeadsPage({ submissions, onApproveSubmission, onDeleteLead }) {
+function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onDeleteLead }) {
   const [error, setError] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState(null);
   const [selectedContactIds, setSelectedContactIds] = useState(() => new Set());
@@ -761,6 +789,14 @@ function TodayLeadsPage({ submissions, onApproveSubmission, onDeleteLead }) {
           </div>
         </section>}
       </> : <div className="empty-state">No lead submissions are waiting for approval.</div>}
+    </section>
+    <section className="panel saved-leads-panel">
+      <div className="panel-heading"><div><div className="section-eyebrow">SENT TO CALL AGENTS</div><h2>Saved Leads</h2></div><span className="count-chip">{savedLeads.length} saved</span></div>
+      {savedLeads.length ? <div className="saved-leads-list">{savedLeads.map((lead) => <article className="saved-lead-row" key={lead.id}>
+        <div className="saved-lead-business"><b>{lead.business}</b><small>{lead.phone}</small></div>
+        <div className="saved-lead-agent"><span>ASSIGNED TO</span><b>{lead.agentName || 'Call agent'}</b></div>
+        <div className="saved-lead-status"><StatusPill status={lead.status || 'pending'} /></div>
+      </article>)}</div> : <div className="empty-state">Approved leads sent to call agents will be saved here.</div>}
     </section>
   </>;
 }

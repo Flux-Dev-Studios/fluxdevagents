@@ -112,7 +112,7 @@ async function distributeApprovedContacts(client, contactIds = null) {
     const { rows } = await client.query(
       `INSERT INTO daily_calls (business_name, phone, staff_id, source_contact_id)
        VALUES ($1, $2, $3, $4)
-       RETURNING id, business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"`,
+       RETURNING id, source_contact_id AS "sourceContactId", business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"`,
       [contact.business, contact.phone, agent.id, contact.id],
     );
     calls.push(rows[0]);
@@ -246,6 +246,18 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
        ORDER BY MIN(gc.created_at)`,
     )
     : Promise.resolve({ rows: [] });
+  const savedLeadsPromise = req.user.role === 'admin'
+    ? pool.query(
+      `SELECT gc.id, gc.business_name AS business, gc.phone, gc.area, gc.category,
+              gc.work_date AS "workDate", gc.assigned_at AS "assignedAt",
+              c.staff_id AS "staffId", su.full_name AS "agentName", c.status, c.notes
+       FROM generated_contacts gc
+       LEFT JOIN daily_calls c ON c.source_contact_id = gc.id AND c.work_date = gc.work_date
+       LEFT JOIN staff_users su ON su.id = c.staff_id
+       WHERE gc.work_date = CURRENT_DATE AND gc.approved_at IS NOT NULL AND gc.assigned_at IS NOT NULL
+       ORDER BY gc.assigned_at DESC, gc.created_at DESC`,
+    )
+    : Promise.resolve({ rows: [] });
   const myContactsPromise = req.user.role === 'contact-generator'
     ? pool.query(
       `SELECT id, submission_id AS "submissionId", business_name AS business, phone, area, category,
@@ -254,8 +266,8 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
       [req.user.id],
     )
     : Promise.resolve({ rows: [] });
-  const [calls, staff, shifts, contacts, contactActivity, contactSubmissions, myContacts] = await Promise.all([
-    callsPromise, staffPromise, shiftPromise, contactsPromise, contactActivityPromise, contactSubmissionsPromise, myContactsPromise,
+  const [calls, staff, shifts, contacts, contactActivity, contactSubmissions, savedLeads, myContacts] = await Promise.all([
+    callsPromise, staffPromise, shiftPromise, contactsPromise, contactActivityPromise, contactSubmissionsPromise, savedLeadsPromise, myContactsPromise,
   ]);
   return res.json({
     user: publicUser(req.user),
@@ -265,6 +277,7 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
     contacts: contacts.rows,
     contactActivity: contactActivity.rows,
     contactSubmissions: contactSubmissions.rows,
+    savedLeads: savedLeads.rows,
     myContacts: myContacts.rows,
   });
 }));
@@ -607,7 +620,7 @@ app.post('/api/calls/assign', requireUser, requireAdmin, asyncRoute(async (req, 
       const assigned = agentRows.rows.reduce((lowest, agent) => counts[agent.id] < counts[lowest.id] ? agent : lowest, agentRows.rows[0]);
       const { rows } = await client.query(
         `INSERT INTO daily_calls (business_name, phone, staff_id, source_contact_id) VALUES ($1, $2, $3, $4)
-         RETURNING id, business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"`,
+         RETURNING id, source_contact_id AS "sourceContactId", business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"`,
         [business, phone, assigned.id, selectedContactIds.includes(String(call.id)) ? call.id : null],
       );
       counts[assigned.id] += 1;
