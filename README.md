@@ -52,7 +52,9 @@ Initialize the hosted database schema and admin account once using the provider'
 
 Before deploying lead activity tracking to an existing database, run `npm run db:migrate:lead-activity` once with `DATABASE_URL` configured locally. This adds an assignment timestamp and index without changing existing records or the admin password.
 
-For an existing database, run `npm run db:migrate:lead-submissions` after deploying this version. Unassigned existing leads and new submissions wait for admin approval; leads already assigned to call agents remain unchanged. Lead agents can check progress in **My leads**. Admins review submissions in **Today’s leads**, where contacts matching a business name or phone number already shared with call agents are flagged and excluded from selection. Leads that were approved but not shared remain eligible for review. New contacts are selected by default; admins can adjust the selection, delete unwanted leads, and approve only selected contacts to move them to **Today’s calls** for review and sharing with call agents.
+For an existing database, run `npm run db:migrate:lead-submissions` after deploying this version. Unassigned existing leads and new submissions wait for admin approval; leads already assigned to call agents remain unchanged. Lead agents can check progress in **My leads**. Admins review submissions in **Today’s leads**, where contacts matching a business name or phone number already shared with call agents are flagged and excluded from selection. Leads that were approved but not shared remain eligible for review. New contacts are selected by default; admins can adjust the selection, delete unwanted leads, and approve selected contacts to share them evenly with approved, active call agents.
+
+For an existing database, run `npm run db:migrate:staff-reports` before deploying the Reports page. This creates the private, saved spreadsheet reports for call agents.
 
 ## Initial accounts
 

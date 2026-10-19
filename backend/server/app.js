@@ -80,6 +80,61 @@ const findWorkspaceCallDuplicates = async (client, calls, contactIds = []) => {
   return findCallDuplicates(existing, calls);
 };
 
+async function distributeApprovedContacts(client, contactIds = null) {
+  const { rows: agents } = await client.query(
+    `SELECT id FROM staff_users
+     WHERE approved = TRUE AND active = TRUE AND role = 'call-agent'
+     ORDER BY created_at, id`,
+  );
+  if (!agents.length) return [];
+
+  const pending = await client.query(
+    `SELECT id, business_name AS business, phone
+     FROM generated_contacts
+     WHERE work_date = CURRENT_DATE AND approved_at IS NOT NULL AND assigned_at IS NULL
+       AND ($1::uuid[] IS NULL OR id = ANY($1::uuid[]))
+     ORDER BY created_at, id FOR UPDATE`,
+    [contactIds],
+  );
+  if (!pending.rows.length) return [];
+
+  const counts = Object.fromEntries(agents.map(({ id }) => [id, 0]));
+  const existing = await client.query(
+    `SELECT staff_id, COUNT(*)::int AS count FROM daily_calls
+     WHERE work_date = CURRENT_DATE AND staff_id = ANY($1::uuid[]) GROUP BY staff_id`,
+    [agents.map(({ id }) => id)],
+  );
+  for (const row of existing.rows) counts[row.staff_id] = row.count;
+
+  const calls = [];
+  for (const contact of pending.rows) {
+    const agent = agents.reduce((lowest, candidate) => counts[candidate.id] < counts[lowest.id] ? candidate : lowest, agents[0]);
+    const { rows } = await client.query(
+      `INSERT INTO daily_calls (business_name, phone, staff_id, source_contact_id)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"`,
+      [contact.business, contact.phone, agent.id, contact.id],
+    );
+    calls.push(rows[0]);
+    counts[agent.id] += 1;
+  }
+  await client.query(
+    `UPDATE generated_contacts SET assigned_at = NOW()
+     WHERE id = ANY($1::uuid[]) AND approved_at IS NOT NULL AND assigned_at IS NULL`,
+    [pending.rows.map(({ id }) => id)],
+  );
+  return calls;
+}
+
+const normalizeReportData = (value) => {
+  if (!Array.isArray(value) || value.length > 201) return null;
+  const rows = value.map((row) => {
+    if (!Array.isArray(row) || row.length > 12) return null;
+    return Array.from({ length: 12 }, (_, index) => String(row[index] ?? '').slice(0, 350));
+  });
+  return rows.some((row) => row === null) ? null : rows;
+};
+
 app.get('/api/health', asyncRoute(async (_req, res) => {
   await pool.query('SELECT 1');
   res.json({ status: 'ok', database: 'connected' });
@@ -128,12 +183,31 @@ app.post('/api/auth/logout', (_req, res) => { clearSession(res); res.status(204)
 app.get('/api/auth/session', requireUser, (req, res) => res.json({ user: publicUser(req.user) }));
 
 app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
+  if (req.user.role === 'admin') {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('LOCK TABLE daily_calls IN SHARE ROW EXCLUSIVE MODE');
+      await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
+      await distributeApprovedContacts(client);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
   const callsQuery = req.user.role === 'admin'
-    ? `SELECT c.id, c.business_name AS business, c.phone, c.staff_id AS "staffId", c.status, c.notes, c.work_date AS "workDate"
-      FROM daily_calls c WHERE c.work_date = CURRENT_DATE ORDER BY c.call_order`
-    : `SELECT c.id, c.business_name AS business, c.phone, c.staff_id AS "staffId", c.status, c.notes, c.work_date AS "workDate"
+    ? `SELECT c.id, c.source_contact_id AS "sourceContactId", gc.submission_id AS "submissionId", gc.generator_id AS "generatorId",
+             gc.area, gc.category, c.business_name AS business, c.phone, c.staff_id AS "staffId", c.status, c.notes, c.work_date AS "workDate"
+      FROM daily_calls c LEFT JOIN generated_contacts gc ON gc.id = c.source_contact_id
+      WHERE c.work_date = CURRENT_DATE ORDER BY c.call_order`
+    : `SELECT c.id, c.source_contact_id AS "sourceContactId", c.business_name AS business, c.phone, c.staff_id AS "staffId", c.status, c.notes, c.work_date AS "workDate"
       FROM daily_calls c WHERE c.work_date = CURRENT_DATE AND c.staff_id = $1 ORDER BY c.call_order`;
-  const callsPromise = req.user.role === 'admin' ? pool.query(callsQuery) : pool.query(callsQuery, [req.user.id]);
+  const callsPromise = req.user.role === 'admin'
+    ? pool.query(callsQuery)
+    : req.user.role === 'call-agent' ? pool.query(callsQuery, [req.user.id]) : Promise.resolve({ rows: [] });
   const staffPromise = req.user.role === 'admin'
     ? pool.query('SELECT id, full_name AS name, email, role, approved, active FROM staff_users WHERE role <> $1 ORDER BY created_at, full_name', ['admin'])
     : Promise.resolve({ rows: [] });
@@ -164,8 +238,8 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
   const myContactsPromise = req.user.role === 'contact-generator'
     ? pool.query(
       `SELECT id, submission_id AS "submissionId", business_name AS business, phone, area, category,
-              work_date AS "workDate", approved_at AS "approvedAt", assigned_at AS "assignedAt", created_at AS "createdAt"
-       FROM generated_contacts WHERE generator_id = $1 AND work_date = CURRENT_DATE ORDER BY created_at DESC`,
+              work_date AS "workDate", (approved_at IS NULL AND assigned_at IS NULL) AS "canEdit", created_at AS "createdAt"
+       FROM generated_contacts WHERE generator_id = $1 ORDER BY created_at DESC`,
       [req.user.id],
     )
     : Promise.resolve({ rows: [] });
@@ -195,12 +269,27 @@ app.get('/api/shifts/today', requireUser, requireAdmin, asyncRoute(async (_req, 
   );
   res.json({ shifts: rows });
 }));
+app.get('/api/calls/today', requireUser, requireAdmin, asyncRoute(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT id, business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"
+     FROM daily_calls WHERE work_date = CURRENT_DATE ORDER BY call_order`,
+  );
+  return res.json({ calls: rows });
+}));
 app.patch('/api/team/:id/approval', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   const role = String(req.body.role || '');
   if (!validRole(role)) return res.status(400).json({ error: 'Choose Call agent or Lead agent.' });
-  const { rows } = await pool.query(`UPDATE staff_users SET role = $2, approved = TRUE WHERE id = $1 AND role <> 'admin' RETURNING id, full_name AS name, email, role, approved, active`, [req.params.id, role]);
-  if (!rows[0]) return res.status(404).json({ error: 'Staff account not found.' });
-  return res.json({ staff: rows[0] });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
+    const { rows } = await client.query(`UPDATE staff_users SET role = $2, approved = TRUE WHERE id = $1 AND role <> 'admin' RETURNING id, full_name AS name, email, role, approved, active`, [req.params.id, role]);
+    if (!rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Staff account not found.' }); }
+    await distributeApprovedContacts(client);
+    await client.query('COMMIT');
+    return res.json({ staff: rows[0] });
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }));
 app.delete('/api/team/:id/approval', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   const { rows } = await pool.query(
@@ -213,19 +302,35 @@ app.delete('/api/team/:id/approval', requireUser, requireAdmin, asyncRoute(async
 app.patch('/api/team/:id/role', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   const role = String(req.body.role || '');
   if (!validRole(role)) return res.status(400).json({ error: 'Choose Call agent or Lead agent.' });
-  const { rows } = await pool.query(`UPDATE staff_users SET role = $2 WHERE id = $1 AND approved = TRUE AND role <> 'admin' RETURNING id`, [req.params.id, role]);
-  if (!rows[0]) return res.status(404).json({ error: 'Approved staff account not found.' });
-  return res.json({ status: 'updated' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
+    const { rows } = await client.query(`UPDATE staff_users SET role = $2 WHERE id = $1 AND approved = TRUE AND role <> 'admin' RETURNING id`, [req.params.id, role]);
+    if (!rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Approved staff account not found.' }); }
+    await distributeApprovedContacts(client);
+    await client.query('COMMIT');
+    return res.json({ status: 'updated' });
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }));
 app.patch('/api/team/:id/active', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   if (typeof req.body.active !== 'boolean') return res.status(400).json({ error: 'Active must be true or false.' });
-  const { rows } = await pool.query(
-    `UPDATE staff_users SET active = $2 WHERE id = $1 AND approved = TRUE AND role <> 'admin'
-     RETURNING id, full_name AS name, email, role, approved, active`,
-    [req.params.id, req.body.active],
-  );
-  if (!rows[0]) return res.status(404).json({ error: 'Approved staff account not found.' });
-  return res.json({ staff: rows[0] });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
+    const { rows } = await client.query(
+      `UPDATE staff_users SET active = $2 WHERE id = $1 AND approved = TRUE AND role <> 'admin'
+       RETURNING id, full_name AS name, email, role, approved, active`,
+      [req.params.id, req.body.active],
+    );
+    if (!rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Approved staff account not found.' }); }
+    await distributeApprovedContacts(client);
+    await client.query('COMMIT');
+    return res.json({ staff: rows[0] });
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }));
 app.delete('/api/team/:id', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   const { rows } = await pool.query(
@@ -242,25 +347,111 @@ app.post('/api/contacts/batch', requireUser, requireRole('contact-generator'), a
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
     const submissionId = randomUUID();
     const created = [];
-    for (const contact of contacts) {
+    const candidates = contacts.map((contact, index) => ({
+      id: String(contact.id || index),
+      business: String(contact.business || '').trim(),
+      phone: String(contact.phone || '').trim(),
+    })).filter((contact) => contact.business && contact.phone);
+    if (!candidates.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'No valid business and phone pairs found.' }); }
+    const { rows: savedContacts } = await client.query(`SELECT id::text AS id, business_name AS business, phone FROM generated_contacts`);
+    const duplicates = findCallDuplicates(savedContacts.rows, candidates).map(({ rowId, reason }) => ({
+      rowId, business: candidates.find((contact) => contact.id === String(rowId))?.business || '', reason,
+    }));
+    const duplicateIds = new Set(duplicates.map((duplicate) => String(duplicate.rowId)));
+    const eligible = candidates.filter((candidate) => !duplicateIds.has(candidate.id));
+    for (const contact of eligible) {
       const business = String(contact.business || '').trim();
       const phone = String(contact.phone || '').trim();
-      if (!business || !phone) continue;
       const { rows } = await client.query(
         `INSERT INTO generated_contacts (submission_id, business_name, phone, area, category, map_query, generator_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, submission_id AS "submissionId", business_name AS business, phone, area, category, map_query AS "mapQuery", generator_id AS "generatorId", work_date AS "workDate", approved_at AS "approvedAt", assigned_at AS "assignedAt", created_at AS "createdAt"`,
+         RETURNING id, submission_id AS "submissionId", business_name AS business, phone, area, category, map_query AS "mapQuery", generator_id AS "generatorId", work_date AS "workDate", TRUE AS "canEdit", created_at AS "createdAt"`,
         [submissionId, business, phone, String(contact.area || ''), String(contact.category || ''), String(contact.mapQuery || ''), req.user.id],
       );
       created.push(rows[0]);
     }
-    if (!created.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'No valid business and phone pairs found.' }); }
     await client.query('COMMIT');
-    return res.status(201).json({ submissionId, contacts: created });
+    return res.status(201).json({ submissionId: created.length ? submissionId : null, contacts: created, duplicates });
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
+}));
+
+app.patch('/api/my-contacts/:id', requireUser, requireRole('contact-generator'), asyncRoute(async (req, res) => {
+  const business = String(req.body.business || '').trim().slice(0, 200);
+  const phone = String(req.body.phone || '').trim().slice(0, 80);
+  const area = String(req.body.area || '').trim().slice(0, 160);
+  const category = String(req.body.category || '').trim().slice(0, 120);
+  if (!business || !phone) return res.status(400).json({ error: 'Business name and phone number are required.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
+    const { rows: currentRows } = await client.query(
+      `SELECT id::text AS id, business_name AS business, phone, approved_at AS "approvedAt", assigned_at AS "assignedAt"
+       FROM generated_contacts
+       WHERE id = $1 AND generator_id = $2 AND work_date = CURRENT_DATE
+       FOR UPDATE`,
+      [req.params.id, req.user.id],
+    );
+    const current = currentRows[0];
+    if (!current) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Today’s saved contact was not found.' }); }
+    if (current.approvedAt || current.assignedAt) { await client.query('ROLLBACK'); return res.status(403).json({ error: 'This saved contact is now managed by your admin.' }); }
+    const { rows: savedContacts } = await client.query(`SELECT id::text AS id, business_name AS business, phone FROM generated_contacts WHERE id <> $1`, [current.id]);
+    const duplicates = findCallDuplicates(savedContacts.rows, [{ id: current.id, business, phone }]).map(({ rowId, reason }) => ({ rowId, reason }));
+    if (duplicates.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ code: 'duplicate_contact', error: `This contact duplicates another saved lead by ${duplicates[0].reason}.`, duplicates: [{ reason: duplicates[0].reason }] });
+    }
+    const { rows } = await client.query(
+      `UPDATE generated_contacts
+       SET business_name = $3, phone = $4, area = $5, category = $6,
+           map_query = concat_ws(' ', NULLIF($6, ''), NULLIF($5, '')),
+           submission_id = $7, approved_at = NULL, assigned_at = NULL, created_at = NOW()
+       WHERE id = $1 AND generator_id = $2
+       RETURNING id, submission_id AS "submissionId", business_name AS business, phone, area, category,
+                 work_date AS "workDate", TRUE AS "canEdit", created_at AS "createdAt"`,
+      [current.id, req.user.id, business, phone, area, category, randomUUID()],
+    );
+    await client.query('COMMIT');
+    return res.json({ contact: rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
+app.delete('/api/my-contacts/:id', requireUser, requireRole('contact-generator'), asyncRoute(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
+    const { rows: currentRows } = await client.query(
+      `SELECT approved_at AS "approvedAt", assigned_at AS "assignedAt" FROM generated_contacts
+       WHERE id = $1 AND generator_id = $2 AND work_date = CURRENT_DATE FOR UPDATE`,
+      [req.params.id, req.user.id],
+    );
+    if (!currentRows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Today’s saved contact was not found.' }); }
+    if (currentRows[0].approvedAt || currentRows[0].assignedAt) { await client.query('ROLLBACK'); return res.status(403).json({ error: 'This saved contact is now managed by your admin.' }); }
+    const { rows } = await client.query(
+      `DELETE FROM generated_contacts
+       WHERE id = $1 AND generator_id = $2 AND work_date = CURRENT_DATE AND approved_at IS NULL AND assigned_at IS NULL
+       RETURNING id`,
+      [req.params.id, req.user.id],
+    );
+    if (!rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Today’s saved contact was not found.' }); }
+    await client.query('COMMIT');
+    return res.status(200).json({ deleted: true });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }));
 
 app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRoute(async (req, res) => {
@@ -304,6 +495,7 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
         [eligibleIds, req.params.id],
       )
       : { rows: [] };
+    const calls = await distributeApprovedContacts(client);
     await client.query('COMMIT');
     if (!approved.rows.length) {
       return res.status(409).json({
@@ -311,7 +503,7 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
         alreadySharedIds: duplicateIds,
       });
     }
-    return res.json({ contacts: approved.rows, alreadySharedIds: duplicateIds });
+    return res.json({ contacts: approved.rows, calls, alreadySharedIds: duplicateIds });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -320,14 +512,39 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
   }
 }));
 
+app.patch('/api/generated-contacts/:id', requireUser, requireAdmin, asyncRoute(async (req, res) => {
+  const business = String(req.body.business || '').trim().slice(0, 200);
+  const phone = String(req.body.phone || '').trim().slice(0, 80);
+  const area = String(req.body.area || '').trim().slice(0, 160);
+  const category = String(req.body.category || '').trim().slice(0, 120);
+  if (!business || !phone) return res.status(400).json({ error: 'Business name and phone number are required.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `UPDATE generated_contacts SET business_name = $2, phone = $3, area = $4, category = $5,
+         map_query = concat_ws(' ', NULLIF($5, ''), NULLIF($4, ''))
+       WHERE id = $1 AND work_date = CURRENT_DATE
+       RETURNING id, submission_id AS "submissionId", generator_id AS "generatorId", business_name AS business, phone, area, category,
+                 work_date AS "workDate", approved_at AS "approvedAt", assigned_at AS "assignedAt"`,
+      [req.params.id, business, phone, area, category],
+    );
+    if (!rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Today’s lead was not found.' }); }
+    await client.query('UPDATE daily_calls SET business_name = $2, phone = $3 WHERE source_contact_id = $1 AND work_date = CURRENT_DATE', [req.params.id, business, phone]);
+    await client.query('COMMIT');
+    return res.json({ contact: rows[0] });
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}));
+
 app.delete('/api/generated-contacts/:id', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   const { rows } = await pool.query(
     `DELETE FROM generated_contacts
-     WHERE id = $1 AND work_date = CURRENT_DATE AND assigned_at IS NULL
+     WHERE id = $1 AND work_date = CURRENT_DATE
      RETURNING id`,
     [req.params.id],
   );
-  if (!rows[0]) return res.status(404).json({ error: 'Unassigned lead not found.' });
+  if (!rows[0]) return res.status(404).json({ error: 'Today’s lead not found.' });
   return res.status(204).end();
 }));
 
@@ -370,9 +587,9 @@ app.post('/api/calls/assign', requireUser, requireAdmin, asyncRoute(async (req, 
       if (!business || !phone) continue;
       const assigned = agentRows.rows.reduce((lowest, agent) => counts[agent.id] < counts[lowest.id] ? agent : lowest, agentRows.rows[0]);
       const { rows } = await client.query(
-        `INSERT INTO daily_calls (business_name, phone, staff_id) VALUES ($1, $2, $3)
+        `INSERT INTO daily_calls (business_name, phone, staff_id, source_contact_id) VALUES ($1, $2, $3, $4)
          RETURNING id, business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"`,
-        [business, phone, assigned.id],
+        [business, phone, assigned.id, selectedContactIds.includes(String(call.id)) ? call.id : null],
       );
       counts[assigned.id] += 1;
       saved.push(rows[0]);
@@ -404,6 +621,98 @@ app.patch('/api/calls/:id', requireUser, requireRole('call-agent'), asyncRoute(a
   const { rows } = await pool.query(sql, values);
   if (!rows[0]) return res.status(404).json({ error: 'Call not found in your queue.' });
   return res.json({ status: 'updated' });
+}));
+
+app.get('/api/reports', requireUser, requireRole('call-agent'), asyncRoute(async (req, res) => {
+  const [{ rows: dayRows }, { rows }] = await Promise.all([
+    pool.query('SELECT CURRENT_DATE::text AS today'),
+    pool.query(
+    `SELECT id, title, data, work_date AS "workDate", updated_at AS "updatedAt", submitted_at AS "submittedAt"
+     FROM staff_reports WHERE staff_id = $1 AND work_date = CURRENT_DATE
+     ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+    [req.user.id],
+    ),
+  ]);
+  return res.json({ report: rows[0] || null, today: dayRows[0].today });
+}));
+app.post('/api/reports', requireUser, requireRole('call-agent'), asyncRoute(async (req, res) => {
+  const title = String(req.body.title || '').trim().slice(0, 120);
+  const data = normalizeReportData(req.body.data);
+  if (!title || !data) return res.status(400).json({ error: 'Add a report name and a valid sheet with up to 200 rows and 12 columns.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: dateRows } = await client.query('SELECT CURRENT_DATE::text AS today');
+    if (req.body.workDate !== dateRows[0].today) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ code: 'report_day_ended', error: 'This report day has ended. Open today’s sheet to continue.' });
+    }
+    await client.query('SELECT id FROM staff_users WHERE id = $1 FOR UPDATE', [req.user.id]);
+    const current = await client.query(
+      `SELECT id FROM staff_reports WHERE staff_id = $1 AND work_date = CURRENT_DATE
+       ORDER BY updated_at DESC, created_at DESC LIMIT 1 FOR UPDATE`,
+      [req.user.id],
+    );
+    const saved = current.rows[0]
+      ? await client.query(
+        `UPDATE staff_reports SET title = $2, data = $3::jsonb, updated_at = NOW(), submitted_at = NULL
+         WHERE id = $1
+         RETURNING id, title, data, work_date AS "workDate", updated_at AS "updatedAt", submitted_at AS "submittedAt"`,
+        [current.rows[0].id, title, JSON.stringify(data)],
+      )
+      : await client.query(
+        `INSERT INTO staff_reports (staff_id, title, data)
+         VALUES ($1, $2, $3::jsonb)
+         RETURNING id, title, data, work_date AS "workDate", updated_at AS "updatedAt", submitted_at AS "submittedAt"`,
+        [req.user.id, title, JSON.stringify(data)],
+      );
+    await client.query('COMMIT');
+    return res.json({ report: saved.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+app.post('/api/reports/:id/send', requireUser, requireRole('call-agent'), asyncRoute(async (req, res) => {
+  const { rows } = await pool.query(
+    `UPDATE staff_reports SET submitted_at = NOW(), updated_at = NOW()
+     WHERE id = $1 AND staff_id = $2 AND work_date = CURRENT_DATE
+     RETURNING id, title, data, work_date AS "workDate", updated_at AS "updatedAt", submitted_at AS "submittedAt"`,
+    [req.params.id, req.user.id],
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Today’s saved report was not found. The day may have ended.' });
+  return res.json({ report: rows[0] });
+}));
+app.patch('/api/reports/:id', requireUser, requireRole('call-agent'), asyncRoute(async (req, res) => {
+  const title = String(req.body.title || '').trim().slice(0, 120);
+  const data = normalizeReportData(req.body.data);
+  if (!title || !data) return res.status(400).json({ error: 'Add a report name and a valid sheet with up to 200 rows and 12 columns.' });
+  const { rows } = await pool.query(
+    `UPDATE staff_reports SET title = $3, data = $4::jsonb, updated_at = NOW(), submitted_at = NULL
+     WHERE id = $1 AND staff_id = $2 AND work_date = CURRENT_DATE
+     RETURNING id, title, data, work_date AS "workDate", updated_at AS "updatedAt", submitted_at AS "submittedAt"`,
+    [req.params.id, req.user.id, title, JSON.stringify(data)],
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Report not found.' });
+  return res.json({ report: rows[0] });
+}));
+app.delete('/api/reports/:id', requireUser, requireRole('call-agent'), asyncRoute(async (req, res) => {
+  const { rows } = await pool.query('DELETE FROM staff_reports WHERE id = $1 AND staff_id = $2 AND work_date = CURRENT_DATE RETURNING id', [req.params.id, req.user.id]);
+  if (!rows[0]) return res.status(404).json({ error: 'Report not found.' });
+  return res.status(204).end();
+}));
+app.get('/api/admin/reports', requireUser, requireAdmin, asyncRoute(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT r.id, r.title, r.data, r.work_date AS "workDate", r.created_at AS "createdAt", r.updated_at AS "updatedAt",
+            s.id AS "staffId", s.full_name AS "staffName", s.email AS "staffEmail"
+     FROM staff_reports r
+     JOIN staff_users s ON s.id = r.staff_id
+     WHERE r.submitted_at IS NOT NULL
+     ORDER BY r.updated_at DESC, r.created_at DESC`,
+  );
+  return res.json({ reports: rows });
 }));
 
 app.post('/api/shifts/clock-in', requireUser, requireRole('call-agent', 'contact-generator'), asyncRoute(async (req, res) => {

@@ -26,6 +26,26 @@ CREATE INDEX IF NOT EXISTS daily_calls_staff_day_idx ON daily_calls (staff_id, w
 CREATE INDEX IF NOT EXISTS daily_calls_day_idx ON daily_calls (work_date);
 CREATE INDEX IF NOT EXISTS daily_calls_order_idx ON daily_calls (work_date, call_order);
 
+CREATE TABLE IF NOT EXISTS staff_reports (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  staff_id UUID NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
+  work_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  title TEXT NOT NULL,
+  data JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE staff_reports ADD COLUMN IF NOT EXISTS work_date DATE NOT NULL DEFAULT CURRENT_DATE;
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = 'staff_reports' AND column_name = 'submitted_at'
+  ) THEN
+    ALTER TABLE staff_reports ADD COLUMN submitted_at TIMESTAMPTZ;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS staff_reports_staff_day_idx ON staff_reports (staff_id, work_date, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS daily_shifts (
   staff_id UUID NOT NULL REFERENCES staff_users(id) ON DELETE CASCADE,
   work_date DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -56,3 +76,5 @@ CREATE INDEX IF NOT EXISTS generated_contacts_day_idx ON generated_contacts (wor
 CREATE INDEX IF NOT EXISTS generated_contacts_generator_day_idx ON generated_contacts (generator_id, work_date);
 CREATE INDEX IF NOT EXISTS generated_contacts_submission_idx ON generated_contacts (work_date, submission_id)
   WHERE approved_at IS NULL AND submission_id IS NOT NULL;
+ALTER TABLE daily_calls ADD COLUMN IF NOT EXISTS source_contact_id UUID REFERENCES generated_contacts(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS daily_calls_source_contact_idx ON daily_calls (source_contact_id) WHERE source_contact_id IS NOT NULL;
