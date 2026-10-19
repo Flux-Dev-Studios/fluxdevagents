@@ -226,7 +226,18 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
               MIN(gc.created_at) AS "submittedAt", COUNT(*)::int AS count,
               json_agg(json_build_object(
                 'id', gc.id, 'business', gc.business_name, 'phone', gc.phone, 'area', gc.area, 'category', gc.category,
-                'alreadyShared', ${alreadySharedContactSql('gc')}
+                'alreadyShared', ${alreadySharedContactSql('gc')},
+                'isDuplicate', EXISTS (
+                  SELECT 1 FROM generated_contacts other_contact
+                  WHERE other_contact.id <> gc.id
+                    AND (
+                      (NULLIF(regexp_replace(other_contact.phone, '[^0-9]', '', 'g'), '') IS NOT NULL
+                        AND NULLIF(regexp_replace(other_contact.phone, '[^0-9]', '', 'g'), '') = NULLIF(regexp_replace(gc.phone, '[^0-9]', '', 'g'), ''))
+                      OR
+                      (NULLIF(regexp_replace(lower(other_contact.business_name), '[^[:alnum:]]', '', 'g'), '') IS NOT NULL
+                        AND NULLIF(regexp_replace(lower(other_contact.business_name), '[^[:alnum:]]', '', 'g'), '') = NULLIF(regexp_replace(lower(gc.business_name), '[^[:alnum:]]', '', 'g'), ''))
+                    )
+                )
               ) ORDER BY gc.created_at) AS contacts
        FROM generated_contacts gc
        JOIN staff_users su ON su.id = gc.generator_id
@@ -356,13 +367,7 @@ app.post('/api/contacts/batch', requireUser, requireRole('contact-generator'), a
       phone: String(contact.phone || '').trim(),
     })).filter((contact) => contact.business && contact.phone);
     if (!candidates.length) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'No valid business and phone pairs found.' }); }
-    const { rows: savedContacts } = await client.query(`SELECT id::text AS id, business_name AS business, phone FROM generated_contacts`);
-    const duplicates = findCallDuplicates(savedContacts, candidates).map(({ rowId, reason }) => ({
-      rowId, business: candidates.find((contact) => contact.id === String(rowId))?.business || '', reason,
-    }));
-    const duplicateIds = new Set(duplicates.map((duplicate) => String(duplicate.rowId)));
-    const eligible = candidates.filter((candidate) => !duplicateIds.has(candidate.id));
-    for (const contact of eligible) {
+    for (const contact of candidates) {
       const business = String(contact.business || '').trim();
       const phone = String(contact.phone || '').trim();
       const { rows } = await client.query(
@@ -374,7 +379,7 @@ app.post('/api/contacts/batch', requireUser, requireRole('contact-generator'), a
       created.push(rows[0]);
     }
     await client.query('COMMIT');
-    return res.status(201).json({ submissionId: created.length ? submissionId : null, contacts: created, duplicates });
+    return res.status(201).json({ submissionId: created.length ? submissionId : null, contacts: created });
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }));
@@ -399,12 +404,6 @@ app.patch('/api/my-contacts/:id', requireUser, requireRole('contact-generator'),
     const current = currentRows[0];
     if (!current) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Today’s saved contact was not found.' }); }
     if (current.approvedAt || current.assignedAt) { await client.query('ROLLBACK'); return res.status(403).json({ error: 'This saved contact is now managed by your admin.' }); }
-    const { rows: savedContacts } = await client.query(`SELECT id::text AS id, business_name AS business, phone FROM generated_contacts WHERE id <> $1`, [current.id]);
-    const duplicates = findCallDuplicates(savedContacts.rows, [{ id: current.id, business, phone }]).map(({ rowId, reason }) => ({ rowId, reason }));
-    if (duplicates.length) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ code: 'duplicate_contact', error: `This contact duplicates another saved lead by ${duplicates[0].reason}.`, duplicates: [{ reason: duplicates[0].reason }] });
-    }
     const { rows } = await client.query(
       `UPDATE generated_contacts
        SET business_name = $3, phone = $4, area = $5, category = $6,
@@ -476,15 +475,34 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
       return res.status(404).json({ error: 'No selected pending leads were found for this lead agent.' });
     }
     const pendingIds = pending.rows.map((contact) => contact.id);
-    const duplicates = await client.query(
+    const alreadyShared = await client.query(
       `SELECT current_contact.id::text AS id
        FROM generated_contacts current_contact
        WHERE current_contact.id = ANY($1::uuid[])
          AND ${alreadySharedContactSql('current_contact')}`,
       [pendingIds],
     );
+    const alreadySharedIds = alreadyShared.rows.map((contact) => contact.id);
+    const duplicates = await client.query(
+      `SELECT current_contact.id::text AS id
+       FROM generated_contacts current_contact
+       WHERE current_contact.id = ANY($1::uuid[])
+         AND EXISTS (
+           SELECT 1 FROM generated_contacts other_contact
+           WHERE other_contact.id <> current_contact.id
+             AND (
+               (NULLIF(regexp_replace(other_contact.phone, '[^0-9]', '', 'g'), '') IS NOT NULL
+                 AND NULLIF(regexp_replace(other_contact.phone, '[^0-9]', '', 'g'), '') = NULLIF(regexp_replace(current_contact.phone, '[^0-9]', '', 'g'), ''))
+               OR
+               (NULLIF(regexp_replace(lower(other_contact.business_name), '[^[:alnum:]]', '', 'g'), '') IS NOT NULL
+                 AND NULLIF(regexp_replace(lower(other_contact.business_name), '[^[:alnum:]]', '', 'g'), '') = NULLIF(regexp_replace(lower(current_contact.business_name), '[^[:alnum:]]', '', 'g'), ''))
+             )
+         )`,
+      [pendingIds],
+    );
     const duplicateIds = duplicates.rows.map((contact) => contact.id);
-    const eligibleIds = pendingIds.filter((id) => !duplicateIds.includes(id));
+    const excludedIds = new Set([...alreadySharedIds, ...duplicateIds]);
+    const eligibleIds = pendingIds.filter((id) => !excludedIds.has(id));
     const approved = eligibleIds.length
       ? await client.query(
         `UPDATE generated_contacts
@@ -499,11 +517,12 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
     await client.query('COMMIT');
     if (!approved.rows.length) {
       return res.status(409).json({
-        error: 'All selected leads have already been shared with call agents. Review the flagged leads and select different contacts.',
-        alreadySharedIds: duplicateIds,
+        error: 'No selected leads could be approved. Review the flagged duplicates and already shared leads.',
+        alreadySharedIds,
+        duplicateIds,
       });
     }
-    return res.json({ contacts: approved.rows, calls, alreadySharedIds: duplicateIds });
+    return res.json({ contacts: approved.rows, calls, alreadySharedIds, duplicateIds });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

@@ -25,6 +25,7 @@ const apiRequest = async (path, options = {}) => {
     error.status = response.status;
     error.duplicates = payload?.duplicates || [];
     error.alreadySharedIds = payload?.alreadySharedIds || [];
+    error.duplicateIds = payload?.duplicateIds || [];
     throw error;
   }
   return payload;
@@ -214,6 +215,7 @@ export default function App() {
       });
     } catch (error) {
       const duplicateIds = new Set(error.alreadySharedIds);
+      const possibleDuplicateIds = new Set(error.duplicateIds);
       if (duplicateIds.size) {
         setContactSubmissions((submissions) => submissions.map((submission) => submission.generatorId === generatorId
           ? {
@@ -222,16 +224,29 @@ export default function App() {
           }
           : submission));
       }
+      if (possibleDuplicateIds.size) {
+        setContactSubmissions((submissions) => submissions.map((submission) => submission.generatorId === generatorId
+          ? {
+            ...submission,
+            contacts: submission.contacts.map((contact) => possibleDuplicateIds.has(contact.id) ? { ...contact, isDuplicate: true } : contact),
+          }
+          : submission));
+      }
       throw error;
     }
-    const { contacts, alreadySharedIds = [] } = result;
+    const { contacts, alreadySharedIds = [], duplicateIds: possibleDuplicateIds = [] } = result;
     const approvedIds = new Set(contacts.map((contact) => contact.id));
     const duplicateIds = new Set(alreadySharedIds);
+    const possibleDuplicateSet = new Set(possibleDuplicateIds);
     setContactSubmissions((submissions) => submissions.flatMap((submission) => {
       if (submission.generatorId !== generatorId) return [submission];
       const remaining = submission.contacts
         .filter((contact) => !approvedIds.has(contact.id))
-        .map((contact) => duplicateIds.has(contact.id) ? { ...contact, alreadyShared: true } : contact);
+        .map((contact) => ({
+          ...contact,
+          ...(duplicateIds.has(contact.id) ? { alreadyShared: true } : {}),
+          ...(possibleDuplicateSet.has(contact.id) ? { isDuplicate: true } : {}),
+        }));
       return remaining.length ? [{ ...submission, contacts: remaining, count: remaining.length }] : [];
     }));
     const calls = result.calls || [];
@@ -239,12 +254,17 @@ export default function App() {
     setContactPool((current) => calls.length
       ? current.filter((contact) => !approvedIds.has(contact.id))
       : [...current, ...contacts]);
-    const skippedCount = alreadySharedIds.length;
+    const alreadySharedCount = new Set(alreadySharedIds).size;
+    const possibleDuplicateCount = [...new Set(possibleDuplicateIds)].filter((id) => !alreadySharedIds.includes(id)).length;
     const approvalText = calls.length
       ? `Approved ${contacts.length} lead${contacts.length === 1 ? '' : 's'} and shared ${calls.length} call${calls.length === 1 ? '' : 's'} evenly`
       : `Approved ${contacts.length} lead${contacts.length === 1 ? '' : 's'}; waiting for an active Call agent`;
-    setToast(`${approvalText}${skippedCount ? `; ${skippedCount} already shared excluded` : ''}.`);
-    return { approvedCount: contacts.length, sharedCount: calls.length, skippedCount };
+    const excludedText = [
+      alreadySharedCount ? `${alreadySharedCount} already shared excluded` : '',
+      possibleDuplicateCount ? `${possibleDuplicateCount} possible duplicate${possibleDuplicateCount === 1 ? '' : 's'} excluded` : '',
+    ].filter(Boolean).join('; ');
+    setToast(`${approvalText}${excludedText ? `; ${excludedText}` : ''}.`);
+    return { approvedCount: contacts.length, sharedCount: calls.length, skippedCount: alreadySharedCount + possibleDuplicateCount };
   };
   const deleteGeneratedContact = async (contact) => {
     try {
@@ -278,10 +298,7 @@ export default function App() {
     const result = await apiRequest('/contacts/batch', { method: 'POST', body: JSON.stringify({ contacts }) });
     setMyContacts((current) => [...current, ...(result.contacts || [])]);
     const savedCount = result.contacts.length;
-    const duplicateCount = result.duplicates?.length || 0;
-    if (!savedCount) setToast(`All ${duplicateCount} duplicate contact${duplicateCount === 1 ? '' : 's'} were skipped. Nothing was sent to admin.`);
-    else if (duplicateCount) setToast(`${savedCount} contact${savedCount === 1 ? '' : 's'} saved for admin review; ${duplicateCount} duplicate${duplicateCount === 1 ? '' : 's'} skipped.`);
-    else setToast(`${savedCount} contact${savedCount === 1 ? '' : 's'} saved for admin review.`);
+    setToast(`${savedCount} contact${savedCount === 1 ? '' : 's'} sent to admin for review.`);
     return result;
   };
   const updateMyContact = async (contact, changes) => {
@@ -678,9 +695,10 @@ function TodayLeadsPage({ submissions, onApproveSubmission, onDeleteLead }) {
   const submittedLeadCount = agents.reduce((total, agent) => total + agent.count, 0);
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
   const alreadySharedCount = selectedAgent?.contacts.filter((contact) => contact.alreadyShared).length || 0;
-  const selectedContacts = selectedAgent?.contacts.filter((contact) => !contact.alreadyShared && selectedContactIds.has(contact.id)) || [];
+  const possibleDuplicateCount = selectedAgent?.contacts.filter((contact) => contact.isDuplicate && !contact.alreadyShared).length || 0;
+  const selectedContacts = selectedAgent?.contacts.filter((contact) => !contact.alreadyShared && !contact.isDuplicate && selectedContactIds.has(contact.id)) || [];
   const selectAgent = (agent) => {
-    setSelectedContactIds(new Set(agent.contacts.filter((contact) => !contact.alreadyShared).map((contact) => contact.id)));
+    setSelectedContactIds(new Set(agent.contacts.filter((contact) => !contact.alreadyShared && !contact.isDuplicate).map((contact) => contact.id)));
     setSelectedAgentId(agent.id);
     setError('');
   };
@@ -716,12 +734,12 @@ function TodayLeadsPage({ submissions, onApproveSubmission, onDeleteLead }) {
           <div className="agent-leads-content" aria-label={`${selectedAgent.name} submitted leads`}>
             <div className="submission-lead-list">{selectedAgent.contacts.map((contact) => <div className="submission-lead-row" key={contact.id}>
               <b>{contact.business}</b><span>{contact.phone}</span><small>{[contact.category, contact.area].filter(Boolean).join(' · ') || 'No category or area added'}</small>
-              <label className={`lead-selection${contact.alreadyShared ? ' is-duplicate' : ''}`}>
+              <label className={`lead-selection${contact.alreadyShared || contact.isDuplicate ? ' is-duplicate' : ''}`}>
                 <input
                   type="checkbox"
-                  aria-label={`${contact.alreadyShared ? 'Already shared duplicate' : 'Select'}: ${contact.business}`}
-                  checked={!contact.alreadyShared && selectedContactIds.has(contact.id)}
-                  disabled={contact.alreadyShared}
+                  aria-label={`${contact.alreadyShared ? 'Already shared duplicate' : contact.isDuplicate ? 'Possible duplicate' : 'Select'}: ${contact.business}`}
+                  checked={!contact.alreadyShared && !contact.isDuplicate && selectedContactIds.has(contact.id)}
+                  disabled={contact.alreadyShared || contact.isDuplicate}
                   onChange={() => setSelectedContactIds((current) => {
                     const next = new Set(current);
                     if (next.has(contact.id)) next.delete(contact.id);
@@ -729,13 +747,13 @@ function TodayLeadsPage({ submissions, onApproveSubmission, onDeleteLead }) {
                     return next;
                   })}
                 />
-                {contact.alreadyShared && <span>Already shared with call agents</span>}
+                {contact.alreadyShared ? <span>Already shared with call agents</span> : contact.isDuplicate && <span>Possible duplicate · delete to resolve</span>}
               </label>
               <LeadActions contact={contact} onDelete={onDeleteLead} />
             </div>)}</div>
           </div>
           <div className="lead-review-selection">
-            <span>{selectedContacts.length} selected · {alreadySharedCount} already shared excluded</span>
+            <span>{selectedContacts.length} selected · {alreadySharedCount} already shared · {possibleDuplicateCount} possible duplicates excluded</span>
           </div>
           <div className="lead-agent-tab-footer">
             <span>{selectedContacts.length} selected leads will be shared evenly with active call agents</span>
@@ -1229,7 +1247,7 @@ function ContactGenerator({ user, shift, elapsed, saved = 0, onClockIn, onClockO
   const [area, setArea] = useState('');
   const [category, setCategory] = useState('');
   const [error, setError] = useState('');
-  const [submissionResult, setSubmissionResult] = useState(null);
+  const [submissionSent, setSubmissionSent] = useState(false);
   const clockedIn = Boolean(shift?.startedAt);
   const mapQuery = [category, area].filter(Boolean).join(' ');
   const submit = async (event) => {
@@ -1237,10 +1255,10 @@ function ContactGenerator({ user, shift, elapsed, saved = 0, onClockIn, onClockO
     const rows = pastedContacts.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => (line.includes('\t') ? line.split('\t') : line.split(',')).map((part) => part.trim()));
     const entries = rows.filter((row) => row[0] && row[1] && !/business\s*name/i.test(row[0])).map(([business, phone], index) => ({ id: `contact-${Date.now()}-${index}`, business, phone, area: area.trim(), category: category.trim(), mapQuery, generatorId: user.id, workDate: today() }));
     if (!entries.length) { setError('Paste at least one business name and phone number.'); return; }
-    try { setSubmissionResult(await onSave(entries)); }
+    try { await onSave(entries); setSubmissionSent(true); }
     catch (saveError) { setError(saveError.message); return; }
     setPastedContacts('');
     setError('');
   };
-  return <><PageHeading kicker={formatShortDate().toUpperCase()} title={`Find businesses, ${user.name.split(' ')[0]}.`} description="Search Maps, then paste multiple business names and phone numbers for admin approval." action={<span className={`shift-indicator ${clockedIn ? 'on' : ''}`}><i />{clockedIn ? 'Shift in progress' : 'Shift not started'}</span>} /><section className="generator-clock"><div><span>TIME TODAY</span><b>{formatDuration(elapsed)}</b></div><button className="primary-button" onClick={clockedIn ? onClockOut : onClockIn}>{clockedIn ? 'Clock out' : 'Clock in'}</button></section><section className="generator-layout"><div className="panel generator-form-panel"><div className="section-eyebrow">1 · SEARCH MAPS</div><h2>Find local businesses</h2><p>Search by business type and area. Use the map listings to collect business names and phone numbers.</p><div className="generator-fields"><label>Business type<input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="e.g. dentists, cafes" /></label><label>Area or city<input value={area} onChange={(event) => setArea(event.target.value)} placeholder="e.g. East Oakland" /></label></div><a className={`maps-search-link ${mapQuery ? '' : 'disabled'}`} href={mapQuery ? `https://www.google.com/maps/search/${encodeURIComponent(mapQuery)}` : undefined} target="_blank" rel="noreferrer" aria-disabled={!mapQuery}><Search size={15} /> Search Google Maps <ArrowUpRight size={14} /></a><div className="section-eyebrow capture-kicker">2 · ADD CONTACTS</div><form onSubmit={submit} className="generator-batch-form"><label className="generator-batch-label" htmlFor="generator-contacts">BUSINESS NAME, PHONE NUMBER<textarea id="generator-contacts" rows="8" value={pastedContacts} onChange={(event) => { setPastedContacts(event.target.value); setError(''); setSubmissionResult(null); }} placeholder={'Northline Coffee, +1 415 555 0142\nMorrow Dental, +1 415 555 0176'} /></label><p className="bulk-hint">One business per line. You can paste two columns directly from a spreadsheet.</p>{error && <p className="form-error">{error}</p>}{submissionResult?.duplicates?.length > 0 && <div className="duplicate-check-warning" role="status"><b>Duplicates skipped:</b> {submissionResult.duplicates.map((duplicate) => `${duplicate.business} is already in the saved lead list (${duplicate.reason})`).join('; ')}</div>}{submissionResult && !submissionResult.duplicates?.length && <p className="duplicate-check-success" role="status">All submitted contacts were new and saved for admin review.</p>}<button className="primary-button generator-save" type="submit"><Plus size={15} /> Submit leads for approval</button></form></div><aside className="generator-side"><div className="generator-count"><span>CONTACTS SAVED</span><b>{saved}</b><small>Review your saved history in My leads</small></div><div className="generator-tip"><MapPin size={17} /><b>Keep it simple</b><p>Only save business names and public phone numbers. Your admin will review and assign the calls.</p></div></aside></section></>;
+  return <><PageHeading kicker={formatShortDate().toUpperCase()} title={`Find businesses, ${user.name.split(' ')[0]}.`} description="Search Maps, then paste multiple business names and phone numbers for admin approval." action={<span className={`shift-indicator ${clockedIn ? 'on' : ''}`}><i />{clockedIn ? 'Shift in progress' : 'Shift not started'}</span>} /><section className="generator-clock"><div><span>TIME TODAY</span><b>{formatDuration(elapsed)}</b></div><button className="primary-button" onClick={clockedIn ? onClockOut : onClockIn}>{clockedIn ? 'Clock out' : 'Clock in'}</button></section><section className="generator-layout"><div className="panel generator-form-panel"><div className="section-eyebrow">1 · SEARCH MAPS</div><h2>Find local businesses</h2><p>Search by business type and area. Use the map listings to collect business names and phone numbers.</p><div className="generator-fields"><label>Business type<input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="e.g. dentists, cafes" /></label><label>Area or city<input value={area} onChange={(event) => setArea(event.target.value)} placeholder="e.g. East Oakland" /></label></div><a className={`maps-search-link ${mapQuery ? '' : 'disabled'}`} href={mapQuery ? `https://www.google.com/maps/search/${encodeURIComponent(mapQuery)}` : undefined} target="_blank" rel="noreferrer" aria-disabled={!mapQuery}><Search size={15} /> Search Google Maps <ArrowUpRight size={14} /></a><div className="section-eyebrow capture-kicker">2 · ADD CONTACTS</div><form onSubmit={submit} className="generator-batch-form"><label className="generator-batch-label" htmlFor="generator-contacts">BUSINESS NAME, PHONE NUMBER<textarea id="generator-contacts" rows="8" value={pastedContacts} onChange={(event) => { setPastedContacts(event.target.value); setError(''); setSubmissionSent(false); }} placeholder={'Northline Coffee, +1 415 555 0142\nMorrow Dental, +1 415 555 0176'} /></label><p className="bulk-hint">One business per line. You can paste two columns directly from a spreadsheet.</p>{error && <p className="form-error">{error}</p>}{submissionSent && <p className="duplicate-check-success" role="status">Submitted to admin for review.</p>}<button className="primary-button generator-save" type="submit"><Plus size={15} /> Submit leads for approval</button></form></div><aside className="generator-side"><div className="generator-count"><span>CONTACTS SAVED</span><b>{saved}</b><small>Review your saved history in My leads</small></div><div className="generator-tip"><MapPin size={17} /><b>Keep it simple</b><p>Only save business names and public phone numbers. Your admin will review and assign the calls.</p></div></aside></section></>;
 }
