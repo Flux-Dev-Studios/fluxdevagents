@@ -306,6 +306,7 @@ app.patch('/api/team/:id/approval', requireUser, requireAdmin, asyncRoute(async 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query('LOCK TABLE daily_calls IN SHARE ROW EXCLUSIVE MODE');
     await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
     const { rows } = await client.query(`UPDATE staff_users SET role = $2, approved = TRUE WHERE id = $1 AND role <> 'admin' RETURNING id, full_name AS name, email, role, approved, active`, [req.params.id, role]);
     if (!rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Staff account not found.' }); }
@@ -475,6 +476,7 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query('LOCK TABLE daily_calls IN SHARE ROW EXCLUSIVE MODE');
     await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
     const pending = await client.query(
       `SELECT id::text AS id, business_name AS business, phone
@@ -486,6 +488,15 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
     if (!pending.rows.length) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'No selected pending leads were found for this lead agent.' });
+    }
+    const availableAgents = await client.query(
+      `SELECT id FROM staff_users
+       WHERE approved = TRUE AND active = TRUE AND role = 'call-agent'
+       ORDER BY created_at, id`,
+    );
+    if (!availableAgents.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'There are no approved, active Call agents available. The leads are still waiting for approval.' });
     }
     const pendingIds = pending.rows.map((contact) => contact.id);
     const alreadyShared = await client.query(
@@ -527,7 +538,10 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
         [eligibleIds, req.params.id],
       )
       : { rows: [] };
-    const calls = await distributeApprovedContacts(client);
+    const calls = await distributeApprovedContacts(client, approved.rows.map((contact) => contact.id));
+    if (calls.length !== approved.rows.length) {
+      throw new Error(`Lead distribution mismatch: approved ${approved.rows.length}, assigned ${calls.length}.`);
+    }
     await client.query('COMMIT');
     if (!approved.rows.length) {
       return res.status(409).json({
