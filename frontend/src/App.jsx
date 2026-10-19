@@ -11,7 +11,9 @@ const ROLE_OPTIONS = [
   { value: 'call-agent', label: 'Call agent' },
   { value: 'contact-generator', label: 'Lead agent' },
 ];
-const today = () => new Date().toLocaleDateString('en-CA');
+const localDateKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+const today = () => localDateKey(new Date());
+const workDateKey = (value) => typeof value === 'string' ? value.slice(0, 10) : value instanceof Date ? localDateKey(value) : '';
 const apiRequest = async (path, options = {}) => {
   const response = await fetch(`/api${path}`, {
     credentials: 'include',
@@ -391,7 +393,7 @@ export default function App() {
     try { await apiRequest(`/calls/${id}`, { method: 'PATCH', body: JSON.stringify({ status: patch.status || current?.status || 'pending', notes: patch.notes ?? current?.notes ?? '' }) }); }
     catch (error) { setToast(error.message); }
   };
-  const dailyCalls = leads.filter((lead) => !lead.workDate || lead.workDate === today());
+  const dailyCalls = leads.filter((lead) => !lead.workDate || workDateKey(lead.workDate) === today());
   const staffLeads = dailyCalls.filter((lead) => lead.staffId === user?.id);
   const activePage = user?.role === 'admin'
     ? ['overview', 'calls', 'leads', 'team', 'reports'].includes(page) ? page : 'overview'
@@ -1246,7 +1248,7 @@ function MyLeadsPage({ contacts, onEditContact, onDeleteContact }) {
   const [editForm, setEditForm] = useState({ business: '', phone: '', category: '', area: '' });
   const [editError, setEditError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const todayContacts = contacts.filter((contact) => contact.workDate === today());
+  const todayContacts = contacts.filter((contact) => workDateKey(contact.workDate) === today());
   const previousContacts = contacts.length - todayContacts.length;
   const startEdit = (contact) => {
     setEditingContact(contact);
@@ -1284,7 +1286,7 @@ function MyLeadsPage({ contacts, onEditContact, onDeleteContact }) {
       {contacts.length ? <div className="my-leads-list">{contacts.map((contact) => {
         return <article className="my-lead-row" key={contact.id}>
           <div className="my-lead-copy"><b>{contact.business}</b><span>{contact.phone}</span><small>{[formatWorkDate(contact.workDate), contact.category, contact.area].filter(Boolean).join(' · ') || 'No category or area added'}</small></div>
-          <div className="my-lead-row-end"><span className="submission-status waiting"><i />Saved submission</span>{contact.workDate === today() && contact.canEdit && <div className="my-lead-actions"><button className="secondary-button" type="button" onClick={() => startEdit(contact)} aria-label={`Edit ${contact.business}`}><Pencil size={13} /> Edit</button><button className="my-lead-delete" type="button" onClick={() => deleteContact(contact)} aria-label={`Delete ${contact.business}`}><Trash2 size={13} /> Delete</button></div>}</div>
+          <div className="my-lead-row-end"><span className="submission-status waiting"><i />Saved submission</span>{workDateKey(contact.workDate) === today() && contact.canEdit && <div className="my-lead-actions"><button className="secondary-button" type="button" onClick={() => startEdit(contact)} aria-label={`Edit ${contact.business}`}><Pencil size={13} /> Edit</button><button className="my-lead-delete" type="button" onClick={() => deleteContact(contact)} aria-label={`Delete ${contact.business}`}><Trash2 size={13} /> Delete</button></div>}</div>
         </article>;
       })}</div> : <div className="empty-state">You have not submitted any contacts yet. Find contacts and submit a list for admin review.</div>}
     </section>
