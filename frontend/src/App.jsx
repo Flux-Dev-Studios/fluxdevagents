@@ -812,11 +812,14 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
     </section>
     <section className="panel saved-leads-panel">
       <div className="panel-heading"><div><div className="section-eyebrow">SENT TO CALL AGENTS</div><h2>Saved Leads</h2></div><span className="count-chip">{savedLeads.length} saved</span></div>
-      {savedLeads.length ? <div className="saved-leads-list">{savedLeads.map((lead) => <article className="saved-lead-row" key={lead.id}>
-        <div className="saved-lead-business"><b>{lead.business}</b><small>{lead.phone}</small></div>
-        <div className="saved-lead-agent"><span>ASSIGNED TO</span><b>{lead.agentName || 'Call agent'}</b></div>
-        <div className="saved-lead-status"><StatusPill status={lead.status || 'pending'} /></div>
-      </article>)}</div> : <div className="empty-state">Approved leads sent to call agents will be saved here.</div>}
+      <details className="shared-contacts-disclosure">
+        <summary><span>View saved leads</span><small>{savedLeads.length} contacts</small><ChevronDown size={16} aria-hidden="true" /></summary>
+        {savedLeads.length ? <div className="saved-leads-list shared-contacts-list">{savedLeads.map((lead) => <article className="saved-lead-row" key={lead.id}>
+          <div className="saved-lead-business"><b>{lead.business}</b><small>{lead.phone}</small></div>
+          <div className="saved-lead-agent"><span>ASSIGNED TO</span><b>{lead.agentName || 'Call agent'}</b></div>
+          <div className="saved-lead-status"><StatusPill status={lead.status || 'pending'} /></div>
+        </article>)}</div> : <div className="empty-state">Approved leads sent to call agents will be saved here.</div>}
+      </details>
     </section>
   </>;
 }
