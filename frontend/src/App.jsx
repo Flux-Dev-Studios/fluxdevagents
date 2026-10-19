@@ -393,7 +393,7 @@ export default function App() {
         setContactActivity(data.contactActivity || []);
       }).catch((error) => {
         if (!isCurrent) return;
-        if (error.status === 401) {
+        if (error.status === 401 || error.message === 'Sign in required.' || error.message === 'Session expired. Sign in again.') {
           setToast('');
           setApiError('Your session is no longer active. Please sign in again to see lead updates.');
           setUser(null);
