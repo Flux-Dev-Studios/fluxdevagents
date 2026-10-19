@@ -500,6 +500,7 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
       `SELECT current_contact.id::text AS id
        FROM generated_contacts current_contact
        WHERE current_contact.id = ANY($1::uuid[])
+         AND NOT ${alreadySharedContactSql('current_contact')}
          AND EXISTS (
            SELECT 1 FROM generated_contacts other_contact
            WHERE other_contact.id <> current_contact.id
@@ -514,7 +515,7 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
       [pendingIds],
     );
     const duplicateIds = duplicates.rows.map((contact) => contact.id);
-    const excludedIds = new Set([...alreadySharedIds, ...duplicateIds]);
+    const excludedIds = new Set(duplicateIds);
     const eligibleIds = pendingIds.filter((id) => !excludedIds.has(id));
     const approved = eligibleIds.length
       ? await client.query(
@@ -530,7 +531,7 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
     await client.query('COMMIT');
     if (!approved.rows.length) {
       return res.status(409).json({
-        error: 'No selected leads could be approved. Review the flagged duplicates and already shared leads.',
+        error: 'No selected leads could be approved. Review the flagged duplicates.',
         alreadySharedIds,
         duplicateIds,
       });
