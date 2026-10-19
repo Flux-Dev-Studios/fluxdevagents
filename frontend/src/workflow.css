@@ -182,6 +182,30 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+.approve-all-selection {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 0 9px;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.approve-all-selection input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--green-2);
+}
+
+.approve-all-selection small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 400;
+}
+
 .lead-agent-tab-footer {
   display: flex;
   align-items: center;

@@ -724,9 +724,11 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId);
   const alreadySharedCount = selectedAgent?.contacts.filter((contact) => contact.alreadyShared).length || 0;
   const possibleDuplicateCount = selectedAgent?.contacts.filter((contact) => contact.isDuplicate && !contact.alreadyShared).length || 0;
+  const selectableContacts = selectedAgent?.contacts.filter((contact) => !contact.isDuplicate || contact.alreadyShared) || [];
   const selectedContacts = selectedAgent?.contacts.filter((contact) => (!contact.isDuplicate || contact.alreadyShared) && selectedContactIds.has(contact.id)) || [];
+  const allSelectableSelected = selectableContacts.length > 0 && selectableContacts.every((contact) => selectedContactIds.has(contact.id));
   const selectAgent = (agent) => {
-    setSelectedContactIds(new Set(agent.contacts.filter((contact) => !contact.alreadyShared && !contact.isDuplicate).map((contact) => contact.id)));
+    setSelectedContactIds(new Set());
     setSelectedAgentId(agent.id);
     setError('');
   };
@@ -760,6 +762,17 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
             <div><b id={`lead-agent-heading-${selectedAgent.id}`}>{selectedAgent.name}</b><small>{selectedAgent.count} leads waiting for review</small></div>
           </div>
           <div className="agent-leads-content" aria-label={`${selectedAgent.name} submitted leads`}>
+            <label className="approve-all-selection">
+              <input
+                type="checkbox"
+                aria-label="Approve all selectable leads"
+                checked={allSelectableSelected}
+                disabled={!selectableContacts.length || isApproving}
+                onChange={() => setSelectedContactIds(allSelectableSelected ? new Set() : new Set(selectableContacts.map((contact) => contact.id)))}
+              />
+              <span>Approve all</span>
+              <small>{selectedContacts.length} of {selectableContacts.length} selectable</small>
+            </label>
             <div className="submission-lead-list">{selectedAgent.contacts.map((contact) => <div className="submission-lead-row" key={contact.id}>
               <b>{contact.business}</b><span>{contact.phone}</span><small>{[contact.category, contact.area].filter(Boolean).join(' · ') || 'No category or area added'}</small>
               <label className={`lead-selection${contact.alreadyShared || contact.isDuplicate ? ' is-duplicate' : ''}`}>
