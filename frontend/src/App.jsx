@@ -78,6 +78,8 @@ export default function App() {
   const [page, setPage] = useState('overview');
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState('');
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [mobileNav, setMobileNav] = useState(() => window.matchMedia('(min-width: 821px)').matches);
   const sidebarRef = useRef(null);
   const menuToggleRef = useRef(null);
@@ -312,7 +314,21 @@ export default function App() {
     setContactPool((current) => current.filter((contact) => !contactIds.includes(contact.id)));
     setToast(`${result.calls.length} calls shared across the team.`);
   };
-  const signOut = async () => { await apiRequest('/auth/logout', { method: 'POST' }).catch(() => {}); setUser(null); setStaff([]); setLeads([]); setContactPool([]); setContactSubmissions([]); setMyContacts([]); setContactActivity([]); setShifts({}); setMobileNav(false); setApiError(''); };
+  const signOut = () => setShowLogoutConfirm(true);
+  const confirmSignOut = async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    await apiRequest('/auth/logout', { method: 'POST' }).catch(() => {});
+    setUser(null); setStaff([]); setLeads([]); setContactPool([]); setContactSubmissions([]); setMyContacts([]); setContactActivity([]); setShifts({}); setMobileNav(false); setApiError('');
+    setShowLogoutConfirm(false);
+    setIsLoggingOut(false);
+  };
+  useEffect(() => {
+    if (!showLogoutConfirm) return undefined;
+    const dismissOnEscape = (event) => { if (event.key === 'Escape' && !isLoggingOut) setShowLogoutConfirm(false); };
+    document.addEventListener('keydown', dismissOnEscape);
+    return () => document.removeEventListener('keydown', dismissOnEscape);
+  }, [showLogoutConfirm, isLoggingOut]);
   const activeShift = user && user.role !== 'admin' ? shifts[user.id] : null;
   const elapsed = activeShift ? activeShift.elapsed + (activeShift.startedAt ? Math.max(0, Math.floor((now - new Date(activeShift.startedAt).getTime()) / 1000)) : 0) : 0;
   const clockIn = async () => {
@@ -447,6 +463,7 @@ export default function App() {
       </div>
     </main>
     {toast && <div className="toast"><Check size={15} />{toast}</div>}
+    {showLogoutConfirm && <div className="logout-confirm-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isLoggingOut) setShowLogoutConfirm(false); }}><section className="logout-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="logout-confirm-title" aria-describedby="logout-confirm-description"><span className="logout-confirm-icon"><LogOut size={20} /></span><h2 id="logout-confirm-title">Log out?</h2><p id="logout-confirm-description">Are you sure you want to log out of your workspace?</p><div className="logout-confirm-actions"><button className="secondary-button" type="button" autoFocus disabled={isLoggingOut} onClick={() => setShowLogoutConfirm(false)}>Cancel</button><button className="primary-button" type="button" disabled={isLoggingOut} onClick={confirmSignOut}><LogOut size={14} />{isLoggingOut ? 'Logging out…' : 'Log out'}</button></div></section></div>}
   </div>;
 }
 
