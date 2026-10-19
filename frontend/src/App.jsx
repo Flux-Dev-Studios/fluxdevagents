@@ -239,7 +239,6 @@ export default function App() {
     const { contacts, alreadySharedIds = [] } = result;
     const approvedIds = new Set(contacts.map((contact) => contact.id));
     const duplicateIds = new Set(alreadySharedIds);
-    const possibleDuplicateSet = new Set(possibleDuplicateIds);
     setContactSubmissions((submissions) => submissions.flatMap((submission) => {
       if (submission.generatorId !== generatorId) return [submission];
       const remaining = submission.contacts
@@ -247,7 +246,6 @@ export default function App() {
         .map((contact) => ({
           ...contact,
           ...(duplicateIds.has(contact.id) ? { alreadyShared: true } : {}),
-          ...(possibleDuplicateSet.has(contact.id) ? { isDuplicate: true } : {}),
         }));
       return remaining.length ? [{ ...submission, contacts: remaining, count: remaining.length }] : [];
     }));
