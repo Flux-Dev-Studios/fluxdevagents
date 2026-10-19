@@ -85,6 +85,7 @@ export default function App() {
   const [mobileNav, setMobileNav] = useState(() => window.matchMedia('(min-width: 821px)').matches);
   const sidebarRef = useRef(null);
   const menuToggleRef = useRef(null);
+  const callsRefreshSequence = useRef(0);
   const [authReady, setAuthReady] = useState(false);
   const [apiError, setApiError] = useState('');
 
@@ -267,7 +268,11 @@ export default function App() {
     if (newlySavedLeads.length) {
       setSavedLeads((current) => [...newlySavedLeads, ...current.filter((item) => !newlySavedLeads.some((saved) => saved.id === item.id))]);
     }
+    const refreshSequence = ++callsRefreshSequence.current;
     setLeads((current) => [...current, ...calls.filter((call) => !current.some((item) => item.id === call.id))]);
+    apiRequest('/calls/today').then(({ calls: latestCalls }) => {
+      if (callsRefreshSequence.current === refreshSequence) setLeads(latestCalls || []);
+    }).catch(() => {});
     setContactPool((current) => calls.length
       ? current.filter((contact) => !approvedIds.has(contact.id))
       : [...current, ...contacts]);
@@ -404,8 +409,9 @@ export default function App() {
       }).catch(() => {});
     };
     const refreshCalls = () => {
+      const requestSequence = ++callsRefreshSequence.current;
       apiRequest('/calls/today').then(({ calls: latestCalls }) => {
-        if (isCurrent) setLeads(latestCalls || []);
+        if (isCurrent && callsRefreshSequence.current === requestSequence) setLeads(latestCalls || []);
       }).catch(() => {});
     };
     const refreshLeadActivity = () => {
