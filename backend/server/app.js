@@ -754,5 +754,39 @@ export default app;
 
 if (!process.env.VERCEL) {
   const port = Number(process.env.PORT || 3001);
-  app.listen(port, () => console.log(`Flux Dev API listening on http://localhost:${port}`));
+  const start = async () => {
+    // Render starts the API directly, so apply the lead approval schema before
+    // accepting requests. The advisory lock keeps simultaneous instances from
+    // racing through the idempotent migration.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1)', [748392615]);
+      await client.query('ALTER TABLE generated_contacts ADD COLUMN IF NOT EXISTS submission_id UUID');
+      await client.query('ALTER TABLE generated_contacts ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ');
+      await client.query(
+        'CREATE INDEX IF NOT EXISTS generated_contacts_submission_idx ON generated_contacts (work_date, submission_id) WHERE approved_at IS NULL AND submission_id IS NOT NULL',
+      );
+      await client.query(
+        `UPDATE generated_contacts
+         SET submission_id = gen_random_uuid(), approved_at = NULL
+         WHERE submission_id IS NULL AND assigned_at IS NULL`,
+      );
+      await client.query(
+        'UPDATE generated_contacts SET approved_at = created_at WHERE approved_at IS NULL AND assigned_at IS NOT NULL',
+      );
+      await client.query('COMMIT');
+      console.log('Lead submission schema is ready.');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+    app.listen(port, '0.0.0.0', () => console.log(`Flux Dev API listening on port ${port}`));
+  };
+  start().catch((error) => {
+    console.error('API startup failed before listening:', error);
+    process.exitCode = 1;
+  });
 }

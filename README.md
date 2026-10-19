@@ -56,6 +56,12 @@ For an existing database, run `npm run db:migrate:lead-submissions` after deploy
 
 For an existing database, run `npm run db:migrate:staff-reports` before deploying the Reports page. This creates the private, saved spreadsheet reports for call agents.
 
+## Deploy the app to Render
+
+For a Render Web Service using the repository root, use `npm install && npm run build` as the build command and `npm run api` as the start command. Set `DATABASE_URL`, `JWT_SECRET`, and `PGSSL=true` when the PostgreSQL provider requires SSL. Set `SERVE_FRONTEND=true` if the same web service should serve the Vite frontend.
+
+Before the API starts listening, it now applies the lead-submission schema migration to the database in `DATABASE_URL`. This makes the approval submission columns available on Render without a separate dashboard pre-deploy command. The Render database must still be initialized with `npm run db:setup` once; configure the same database URL and required admin settings when doing so. If the startup migration fails, the API logs the database error and does not start accepting requests.
+
 ## Initial accounts
 
 - The initial admin is `asiegbukelvin3974@gmail.com`; its name and password come from `ADMIN_NAME` and `ADMIN_PASSWORD` in `.env`.
