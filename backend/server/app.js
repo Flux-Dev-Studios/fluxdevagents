@@ -226,11 +226,13 @@ app.get('/api/bootstrap', requireUser, asyncRoute(async (req, res) => {
   }
   const callsQuery = req.user.role === 'admin'
     ? `SELECT c.id, c.source_contact_id AS "sourceContactId", gc.submission_id AS "submissionId", gc.generator_id AS "generatorId",
-             gc.area, gc.category, c.business_name AS business, c.phone, c.staff_id AS "staffId", c.status, c.notes, c.work_date AS "workDate"
+             gc.area, gc.category, c.business_name AS business, c.phone, c.staff_id AS "staffId", su.full_name AS "agentName", c.status, c.notes, c.work_date AS "workDate"
       FROM daily_calls c LEFT JOIN generated_contacts gc ON gc.id = c.source_contact_id
+      LEFT JOIN staff_users su ON su.id = c.staff_id
       WHERE c.work_date = CURRENT_DATE ORDER BY c.call_order`
-    : `SELECT c.id, c.source_contact_id AS "sourceContactId", c.business_name AS business, c.phone, c.staff_id AS "staffId", c.status, c.notes, c.work_date AS "workDate"
-      FROM daily_calls c WHERE c.work_date = CURRENT_DATE AND c.staff_id = $1 ORDER BY c.call_order`;
+    : `SELECT c.id, c.source_contact_id AS "sourceContactId", c.business_name AS business, c.phone, c.staff_id AS "staffId", su.full_name AS "agentName", c.status, c.notes, c.work_date AS "workDate"
+      FROM daily_calls c LEFT JOIN staff_users su ON su.id = c.staff_id
+      WHERE c.work_date = CURRENT_DATE AND c.staff_id = $1 ORDER BY c.call_order`;
   const callsPromise = req.user.role === 'admin'
     ? pool.query(callsQuery)
     : req.user.role === 'call-agent' ? pool.query(callsQuery, [req.user.id]) : Promise.resolve({ rows: [] });
@@ -321,8 +323,9 @@ app.get('/api/shifts/today', requireUser, requireAdmin, asyncRoute(async (_req, 
 }));
 app.get('/api/calls/today', requireUser, requireAdmin, asyncRoute(async (_req, res) => {
   const { rows } = await pool.query(
-    `SELECT id, business_name AS business, phone, staff_id AS "staffId", status, notes, work_date AS "workDate"
-     FROM daily_calls WHERE work_date = CURRENT_DATE ORDER BY call_order`,
+    `SELECT c.id, c.business_name AS business, c.phone, c.staff_id AS "staffId", su.full_name AS "agentName", c.status, c.notes, c.work_date AS "workDate"
+     FROM daily_calls c LEFT JOIN staff_users su ON su.id = c.staff_id
+     WHERE c.work_date = CURRENT_DATE ORDER BY c.call_order`,
   );
   return res.json({ calls: rows });
 }));

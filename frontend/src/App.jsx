@@ -719,7 +719,7 @@ function AdminOverview({ leads, shifts, now, onNavigate, staff, contacts = [], c
           })}
         </div>
       </section>
-      <section className="panel interested-panel"><div className="panel-heading"><div><div className="section-eyebrow">FOLLOW UP</div><h2>Interested businesses</h2></div></div>{interested.length ? interested.map((lead) => { const assigned = STAFF.find((person) => person.id === lead.staffId); return <div className="interested-item" key={lead.id}><span className="interested-check"><Check size={14} /></span><div className="interested-copy"><b>{lead.business}</b><small>{lead.contact} · {lead.phone}</small><span>{assigned?.name || 'Staff member'}{lead.notes ? ` · ${lead.notes}` : ''}</span></div></div>; }) : <div className="empty-state compact">Interested businesses will appear here.</div>}</section>
+      <section className="panel interested-panel"><div className="panel-heading"><div><div className="section-eyebrow">FOLLOW UP</div><h2>Interested businesses</h2></div></div>{interested.length ? interested.map((lead) => { const assigned = STAFF.find((person) => person.id === lead.staffId); return <div className="interested-item" key={lead.id}><span className="interested-check"><Check size={14} /></span><div className="interested-copy"><b>{lead.business}</b><small>{lead.phone}</small><span>Call agent: {lead.agentName || assigned?.name || 'Unknown agent'}</span>{lead.notes && <span>Notes: {lead.notes}</span>}</div></div>; }) : <div className="empty-state compact">Interested businesses will appear here.</div>}</section>
     </div>
     <p className="local-data-note"><Clock3 size={14} /> Total team time today: {formatDuration(totalSeconds)}</p>
   </>;
