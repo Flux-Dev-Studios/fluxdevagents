@@ -64,17 +64,19 @@ const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req,
 const validRole = (role) => role === 'call-agent' || role === 'contact-generator';
 const alreadySharedContactSql = (contactAlias) => `EXISTS (
   SELECT 1 FROM daily_calls shared_call
-  WHERE NULLIF(regexp_replace(shared_call.phone, '[^0-9]', '', 'g'), '') = NULLIF(regexp_replace(${contactAlias}.phone, '[^0-9]', '', 'g'), '')
+  WHERE shared_call.status <> 'pending'
+    AND (NULLIF(regexp_replace(shared_call.phone, '[^0-9]', '', 'g'), '') = NULLIF(regexp_replace(${contactAlias}.phone, '[^0-9]', '', 'g'), '')
      OR NULLIF(regexp_replace(lower(shared_call.business_name), '[^[:alnum:]]', '', 'g'), '') = NULLIF(regexp_replace(lower(${contactAlias}.business_name), '[^[:alnum:]]', '', 'g'), '')
+    )
 )`;
 const findWorkspaceCallDuplicates = async (client, calls, contactIds = []) => {
   const [existingCalls, pendingContacts] = await Promise.all([
-    client.query(`SELECT id::text AS id, business_name AS business, phone FROM daily_calls WHERE work_date = CURRENT_DATE`),
+    client.query(`SELECT id::text AS id, business_name AS business, phone FROM daily_calls WHERE status <> 'pending'`),
     client.query(`SELECT id::text AS id, business_name AS business, phone FROM generated_contacts WHERE work_date = CURRENT_DATE AND assigned_at IS NULL`),
   ]);
   const selectedContactIds = new Set(contactIds.map(String));
   const existing = [
-    ...existingCalls.rows.map((row) => ({ ...row, source: "today's calls" })),
+    ...existingCalls.rows.map((row) => ({ ...row, source: 'previously called leads' })),
     ...pendingContacts.rows.filter((row) => !selectedContactIds.has(row.id)).map((row) => ({ ...row, source: 'pending lead submissions' })),
   ];
   return findCallDuplicates(existing, calls);
