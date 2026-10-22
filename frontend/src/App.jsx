@@ -211,12 +211,12 @@ export default function App() {
       setToast(active ? 'Staff account reactivated.' : 'Staff account deactivated.');
     } catch (error) { setToast(error.message); }
   };
-  const approveContactSubmission = async (generatorId, contactIds) => {
+  const approveContactSubmission = async (generatorId, contactIds, agentIds) => {
     let result;
     try {
       result = await apiRequest(`/contact-agents/${generatorId}/approval`, {
         method: 'PATCH',
-        body: JSON.stringify({ contactIds }),
+        body: JSON.stringify({ contactIds, agentIds }),
       });
     } catch (error) {
       const duplicateIds = new Set(error.alreadySharedIds);
@@ -280,7 +280,7 @@ export default function App() {
       : [...current, ...contacts]);
     const alreadySharedCount = new Set(alreadySharedIds).size;
     const approvalText = calls.length
-      ? `Approved ${contacts.length} lead${contacts.length === 1 ? '' : 's'} and shared ${calls.length} call${calls.length === 1 ? '' : 's'} evenly`
+      ? `Approved ${contacts.length} lead${contacts.length === 1 ? '' : 's'} and shared ${calls.length} call${calls.length === 1 ? '' : 's'} with your selected agents`
       : `Approved ${contacts.length} lead${contacts.length === 1 ? '' : 's'}; waiting for an active Call agent`;
     const noticeText = [
       alreadySharedCount ? `${alreadySharedCount} previously shared lead${alreadySharedCount === 1 ? '' : 's'} sent again` : '',
@@ -303,6 +303,28 @@ export default function App() {
         ? { ...item, submitted: Math.max(0, item.submitted - 1) }
         : item).filter((item) => item.submitted > 0));
       setToast(`Deleted ${contact.business} from today’s leads.`);
+      return true;
+    } catch (error) {
+      setToast(error.message);
+      return false;
+    }
+  };
+  const deleteAgentPendingLeads = async (agent) => {
+    const count = contactSubmissions.filter((submission) => submission.generatorId === agent.id)
+      .reduce((total, submission) => total + submission.count, 0);
+    if (!count || !window.confirm(`Delete all ${count} leads submitted by ${agent.name} that are still waiting for review? This cannot be undone.`)) return false;
+    try {
+      const { deletedIds = [] } = await apiRequest(`/contact-agents/${agent.id}/pending-leads`, { method: 'DELETE' });
+      const deleted = new Set(deletedIds);
+      setContactSubmissions((submissions) => submissions.flatMap((submission) => {
+        if (submission.generatorId !== agent.id) return [submission];
+        const remaining = submission.contacts.filter((contact) => !deleted.has(contact.id));
+        return remaining.length ? [{ ...submission, contacts: remaining, count: remaining.length }] : [];
+      }));
+      setContactActivity((activity) => activity.map((item) => item.generatorId === agent.id
+        ? { ...item, submitted: Math.max(0, item.submitted - deletedIds.length) }
+        : item).filter((item) => item.submitted > 0));
+      setToast(`Deleted ${deletedIds.length} pending lead${deletedIds.length === 1 ? '' : 's'} from ${agent.name}.`);
       return true;
     } catch (error) {
       setToast(error.message);
@@ -515,7 +537,7 @@ export default function App() {
           onCheckDuplicates={(calls, contactIds) => apiRequest('/calls/check-duplicates', { method: 'POST', body: JSON.stringify({ calls, contactIds }) })}
           onAssign={assignCalls}
         />}
-        {user.role === 'admin' && activePage === 'leads' && <TodayLeadsPage submissions={contactSubmissions} savedLeads={savedLeads} onApproveSubmission={approveContactSubmission} onDeleteLead={deleteGeneratedContact} />}
+        {user.role === 'admin' && activePage === 'leads' && <TodayLeadsPage submissions={contactSubmissions} savedLeads={savedLeads} callAgents={staff.filter((person) => person.approved && person.active !== false && person.role === 'call-agent')} onApproveSubmission={approveContactSubmission} onDeleteLead={deleteGeneratedContact} onDeleteAgentLeads={deleteAgentPendingLeads} />}
         {user.role === 'admin' && activePage === 'reports' && <AdminReportsPage />}
         {user.role === 'admin' && activePage === 'team' && <TeamApprovals staff={staff} onApprove={approveStaff} onDeny={denyStaff} onDelete={deleteStaff} onRoleChange={updateStaffRole} onSetActive={setStaffActive} />}
         {user.role === 'contact-generator' && activePage === 'generate' && <ContactGenerator user={user} shift={activeShift} elapsed={elapsed} saved={myContacts.length} onClockIn={clockIn} onClockOut={clockOut} onSave={saveContacts} />}
@@ -702,11 +724,13 @@ function AdminOverview({ leads, shifts, now, onNavigate, staff, contacts = [], c
     <p className="local-data-note"><Clock3 size={14} /> Total team time today: {formatDuration(totalSeconds)}</p>
   </>;
 }
-function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onDeleteLead }) {
+function TodayLeadsPage({ submissions, savedLeads = [], callAgents = [], onApproveSubmission, onDeleteLead, onDeleteAgentLeads }) {
   const [error, setError] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState(null);
   const [selectedContactIds, setSelectedContactIds] = useState(() => new Set());
+  const [selectedCallAgentIds, setSelectedCallAgentIds] = useState(() => new Set());
   const [isApproving, setIsApproving] = useState(false);
+  const [isDeletingAgentLeads, setIsDeletingAgentLeads] = useState(false);
   const agents = submissions.reduce((groups, submission) => {
     const existing = groups.find((agent) => agent.id === submission.generatorId);
     const contacts = submission.contacts.map((contact) => ({
@@ -737,6 +761,7 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
   const allSelectableSelected = selectableContacts.length > 0 && selectableContacts.every((contact) => selectedContactIds.has(contact.id));
   const selectAgent = (agent) => {
     setSelectedContactIds(new Set());
+    setSelectedCallAgentIds(new Set(callAgents.map((person) => person.id)));
     setSelectedAgentId(agent.id);
     setError('');
   };
@@ -745,7 +770,7 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
     setIsApproving(true);
     setError('');
     try {
-      await onApproveSubmission(selectedAgent.id, selectedContacts.map((contact) => contact.id));
+      await onApproveSubmission(selectedAgent.id, selectedContacts.map((contact) => contact.id), [...selectedCallAgentIds]);
     } catch (approvalError) {
       setError(approvalError.message);
     } finally {
@@ -766,8 +791,18 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
         </button>)}</div>}
         {selectedAgent && <section className="lead-agent-tab" role="tabpanel" aria-labelledby={`lead-agent-heading-${selectedAgent.id}`}>
           <div className="lead-agent-tab-header">
-            <button className="secondary-button" type="button" onClick={() => { setSelectedAgentId(null); setSelectedContactIds(new Set()); setError(''); }}><ArrowLeft size={14} /> All lead agents</button>
+            <button className="secondary-button" type="button" onClick={() => { setSelectedAgentId(null); setSelectedContactIds(new Set()); setSelectedCallAgentIds(new Set()); setError(''); }}><ArrowLeft size={14} /> All lead agents</button>
             <div><b id={`lead-agent-heading-${selectedAgent.id}`}>{selectedAgent.name}</b><small>{selectedAgent.count} leads waiting for review</small></div>
+            <button className="secondary-button delete-agent-leads-button" type="button" disabled={isDeletingAgentLeads || isApproving} onClick={async () => {
+              setIsDeletingAgentLeads(true);
+              setError('');
+              if (await onDeleteAgentLeads(selectedAgent)) {
+                setSelectedAgentId(null);
+                setSelectedContactIds(new Set());
+                setSelectedCallAgentIds(new Set());
+              }
+              setIsDeletingAgentLeads(false);
+            }}><Trash2 size={13} /> {isDeletingAgentLeads ? 'Deleting…' : 'Delete all pending'}</button>
           </div>
           <div className="agent-leads-content" aria-label={`${selectedAgent.name} submitted leads`}>
             <label className="approve-all-selection">
@@ -803,9 +838,20 @@ function TodayLeadsPage({ submissions, savedLeads = [], onApproveSubmission, onD
           <div className="lead-review-selection">
             <span>{selectedContacts.length} selected · {alreadySharedCount} already shared · {possibleDuplicateCount} possible duplicates flagged</span>
           </div>
+          <div className="call-agent-recipient-picker">
+            <div><b>Share with call agents</b><small>Choose who receives these leads. Calls will be balanced among your selection.</small></div>
+            {callAgents.length ? <div className="call-agent-recipient-list">{callAgents.map((person) => <label key={person.id}>
+              <input type="checkbox" checked={selectedCallAgentIds.has(person.id)} disabled={isApproving} onChange={() => setSelectedCallAgentIds((current) => {
+                const next = new Set(current);
+                if (next.has(person.id)) next.delete(person.id); else next.add(person.id);
+                return next;
+              })} />
+              <span>{person.name}</span>
+            </label>)}</div> : <p className="empty-state compact">No active call agents are available.</p>}
+          </div>
           <div className="lead-agent-tab-footer">
-            <span>{selectedContacts.length} selected leads will be shared evenly with active call agents</span>
-            <button className="primary-button" type="button" disabled={isApproving || !selectedContacts.length} onClick={approveSelected}><Check size={14} /> {isApproving ? 'Approving…' : 'Approve & share'}</button>
+            <span>{selectedContacts.length} leads · {selectedCallAgentIds.size} recipient{selectedCallAgentIds.size === 1 ? '' : 's'}</span>
+            <button className="primary-button" type="button" disabled={isApproving || !selectedContacts.length || !selectedCallAgentIds.size} onClick={approveSelected}><Check size={14} /> {isApproving ? 'Approving…' : 'Approve & share'}</button>
           </div>
         </section>}
       </> : <div className="empty-state">No lead submissions are waiting for approval.</div>}
@@ -845,27 +891,6 @@ function LeadActions({ contact, onDelete, onEdit }) {
       {onEdit && <button type="button" role="menuitem" onClick={() => { setIsOpen(false); onEdit(contact); }}>Edit</button>}
       <button type="button" role="menuitem" data-danger="true" onClick={() => { setIsOpen(false); onDelete(contact); }}>Delete</button>
     </div>}
-  </div>;
-}
-
-function ReportSheetMenu({ onDelete, disabled }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const menuRef = useRef(null);
-  useEffect(() => {
-    if (!isOpen) return undefined;
-    const closeMenu = (event) => {
-      if (event.key === 'Escape' || (event.type === 'pointerdown' && !menuRef.current?.contains(event.target))) setIsOpen(false);
-    };
-    document.addEventListener('pointerdown', closeMenu);
-    document.addEventListener('keydown', closeMenu);
-    return () => {
-      document.removeEventListener('pointerdown', closeMenu);
-      document.removeEventListener('keydown', closeMenu);
-    };
-  }, [isOpen]);
-  return <div className="lead-actions-menu" ref={menuRef}>
-    <button className="icon-button lead-menu-trigger" type="button" aria-label="Report sheet actions" aria-haspopup="menu" aria-expanded={isOpen} disabled={disabled} onClick={() => setIsOpen((open) => !open)}><MoreVertical size={17} /></button>
-    {isOpen && <div className="lead-menu-popover" role="menu"><button type="button" role="menuitem" data-danger="true" onClick={() => { setIsOpen(false); onDelete(); }}>Delete sheet</button></div>}
   </div>;
 }
 
@@ -1142,25 +1167,6 @@ function ReportsPage() {
       setIsSaving(false);
     }
   };
-  const deleteAndStartNew = async () => {
-    if (!report?.id || isSaving) return;
-    const sentWarning = report.submittedAt ? ' It will also be removed from the admin reports list.' : '';
-    if (!window.confirm(`Delete today’s report and start a new sheet? This cannot be undone.${sentWarning}`)) return;
-    setIsSaving(true);
-    setError('');
-    try {
-      await apiRequest(`/reports/${report.id}`, { method: 'DELETE' });
-      setReport(null);
-      setTitle('Daily call report');
-      setCells(createReportSheet());
-      setActiveCell({ row: 0, column: 0 });
-      setIsEditing(true);
-    } catch (deleteError) {
-      setError(deleteError.message);
-    } finally {
-      setIsSaving(false);
-    }
-  };
   const addRows = () => {
     setCells((current) => [...current, ...Array.from({ length: 10 }, () => Array(REPORT_COLUMNS.length).fill(''))].slice(0, 201));
   };
@@ -1178,7 +1184,7 @@ function ReportsPage() {
     </section> : <section className="report-daily-card">
       <span className="daily-report-icon"><FileSpreadsheet size={22} /></span>
       <div className="daily-report-copy"><span className="section-eyebrow">TODAY’S REPORT · {report?.submittedAt ? 'SENT' : report ? 'DRAFT' : 'NOT STARTED'}</span><h2>{report?.title || 'No report saved today'}</h2><p>{report ? `Last saved ${formatClockTime(report.updatedAt)}. You can continue editing until the day ends.` : 'Open today’s sheet and save it as a draft. You can send it to your admin when it is ready.'}</p></div>
-      <div className="daily-report-actions"><button className="secondary-button" type="button" onClick={openSheet}><FileSpreadsheet size={15} /> {report ? 'Edit today’s report' : 'Open today’s sheet'}</button>{report && <><button className="primary-button" type="button" onClick={sendReport} disabled={isSaving || Boolean(report.submittedAt)}><Send size={15} /> {report.submittedAt ? 'Submit' : 'Send report'}</button><ReportSheetMenu onDelete={deleteAndStartNew} disabled={isSaving} /></>}</div>
+      <div className="daily-report-actions"><button className="secondary-button" type="button" onClick={openSheet}><FileSpreadsheet size={15} /> {report ? 'Edit today’s report' : 'Open today’s sheet'}</button>{report && <button className="primary-button" type="button" onClick={sendReport} disabled={isSaving || Boolean(report.submittedAt)}><Send size={15} /> {report.submittedAt ? 'Submitted' : 'Send report'}</button>}</div>
     </section>}
     {showSaved && <div className="report-saved-backdrop" role="presentation"><section className="report-saved-dialog" role="dialog" aria-modal="true" aria-labelledby="report-saved-title"><span className="report-saved-check"><CheckCheck size={23} /></span><h2 id="report-saved-title">{showSaved === 'sent' ? 'Report sent' : 'Saved'}</h2><p>{showSaved === 'sent' ? 'Your report has been sent to the admin.' : 'Your report is saved as a draft for today. You can edit it or send it when it is ready.'}</p><button className="primary-button" type="button" onClick={() => setShowSaved(false)}>Done</button></section></div>}
   </div>;
@@ -1186,7 +1192,10 @@ function ReportsPage() {
 
 function AdminReportsPage() {
   const [reports, setReports] = useState([]);
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedStaffId, setSelectedStaffId] = useState('');
+  const [isReportOpen, setIsReportOpen] = useState(false);
+  const [reportStartDate, setReportStartDate] = useState('');
+  const [reportEndDate, setReportEndDate] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -1194,7 +1203,6 @@ function AdminReportsPage() {
     const refreshReports = () => apiRequest('/admin/reports').then(({ reports: allReports }) => {
       if (!current) return;
       setReports(allReports);
-      setSelectedId((selected) => allReports.some((report) => report.id === selected) ? selected : (allReports[0]?.id || ''));
       setError('');
     }).catch((loadError) => {
       if (current) setError(loadError.message);
@@ -1203,25 +1211,83 @@ function AdminReportsPage() {
     const interval = window.setInterval(refreshReports, 10_000);
     return () => { current = false; window.clearInterval(interval); };
   }, []);
-  const selected = reports.find((report) => report.id === selectedId);
-  const entryCount = (report) => (report.data || []).slice(1).filter((row) => row.some((cell) => String(cell || '').trim())).length;
+  const filteredReports = reports.filter((report) => {
+    const workDate = workDateKey(report.workDate);
+    return (!reportStartDate || workDate >= reportStartDate) && (!reportEndDate || workDate <= reportEndDate);
+  });
+  const agents = filteredReports.reduce((groups, report) => {
+    let agent = groups.find((item) => item.staffId === report.staffId);
+    if (!agent) {
+      agent = { staffId: report.staffId, staffName: report.staffName, staffEmail: report.staffEmail, reports: [] };
+      groups.push(agent);
+    }
+    agent.reports.push(report);
+    return groups;
+  }, []);
+  const selectedAgent = agents.find((agent) => agent.staffId === selectedStaffId) || agents[0];
+  const entries = selectedAgent?.reports.flatMap((report) => formatReportData(report.data).slice(1)
+    .filter((row) => row.some((cell) => String(cell || '').trim()))
+    .map((row) => ({ date: row[0] || formatWorkDate(report.workDate), business: row[1], contact: row[2], notes: row[3], status: row[4] }))) || [];
+  const notInterestedStatus = /not interested|uninterested|declined|not a fit/i;
+  const interestedCount = entries.filter((entry) => /interested/i.test(entry.status || '') && !notInterestedStatus.test(entry.status || '')).length;
+  const noAnswerCount = entries.filter((entry) => /no[ -]?answer|unanswered|no response/i.test(entry.status || '')).length;
+  const notInterestedCount = entries.filter((entry) => notInterestedStatus.test(entry.status || '')).length;
+  const feedbackTopics = [
+    { name: 'website', pattern: /\bwebsite\b|\bweb ?site\b|\bonline presence\b|\bweb page\b|\bmobile layout\b/i, advice: 'Review the website requests in these client comments before changing the site.' },
+    { name: 'pricing', pattern: /\bprice\w*\b|\bcost\w*\b|\bbudget\w*\b|\bexpensive\b|\bafford\w*\b/i, advice: 'Review the pricing concerns in these client comments before changing packages or rates.' },
+    { name: 'product or service', pattern: /\bfeature\w*\b|\bfunctionality\b|\bproduct\w*\b|\bservice\w*\b/i, advice: 'Review the requested product or service changes in these client comments.' },
+    { name: 'support', pattern: /\bsupport\b|\bresponse time\b|\bcustomer service\b|\bcommunication\b/i, advice: 'Review the support issues raised in these client comments and decide who should follow up.' },
+    { name: 'marketing', pattern: /\bmarketing\b|\badvert\w*\b|\bsocial media\b|\bcampaign\w*\b|\bvisibility\b/i, advice: 'Review the marketing or visibility feedback in these client comments.' },
+    { name: 'delivery or timing', pattern: /\bturnaround\b|\bdelivery\b|\bdeadline\b|\btoo slow\b|\bdelay\w*\b/i, advice: 'Review the delivery or timing concerns raised in these client comments.' },
+  ].map((topic) => ({ ...topic, count: entries.filter((entry) => topic.pattern.test(entry.notes || '')).length }))
+    .filter((topic) => topic.count > 0)
+    .sort((first, second) => second.count - first.count);
+  const notesCount = entries.filter((entry) => String(entry.notes || '').trim()).length;
+  const recommendation = feedbackTopics.length
+    ? `${feedbackTopics[0].advice} (${feedbackTopics[0].count} note${feedbackTopics[0].count === 1 ? '' : 's'} mention ${feedbackTopics[0].name}.)`
+    : notesCount
+      ? 'The notes contain client comments, but no clear topic was detected. Review them before changing the website or business.'
+      : 'There are no client comments in this report’s Notes yet, so there is not enough feedback to recommend a change.';
+  const downloadAgentReport = () => {
+    if (!selectedAgent) return;
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+    const rowsHtml = entries.map((entry) => `<tr>${[entry.date, entry.business, entry.contact, entry.notes, entry.status].map((value) => `<td>${escapeHtml(value)}</td>`).join('')}</tr>`).join('');
+    const documentHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(selectedAgent.staffName)} - Flux Dev Report</title><style>body{margin:0;background:#f3f6f2;color:#26382c;font:14px Arial,sans-serif}main{max-width:1050px;margin:32px auto;padding:28px;background:#fff;border:1px solid #e1e8df;border-radius:12px}h1{margin:0 0 6px;font-size:25px}h2{margin:26px 0 12px;font-size:17px}.muted{color:#718071}.stats{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:10px;margin:20px 0}.stats div{padding:12px;border:1px solid #e3eae1;border-radius:8px;background:#f8faf7}.stats span,.stats b{display:block}.stats span{margin-bottom:7px;color:#7c897d;font-size:10px;text-transform:uppercase;letter-spacing:.06em}.stats b{font-size:21px;color:#376344}.recommendation{margin-top:24px;padding:15px;border:1px solid #dfeade;border-radius:8px;background:#f5f9f4;line-height:1.55}table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid #e7ece5;text-align:left;vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere}th{background:#f2f6f1;color:#526353;font-size:11px;text-transform:uppercase;letter-spacing:.04em}td{font-size:12px}.table-wrap{overflow:auto}@media(max-width:560px){main{margin:10px;padding:16px}.stats{grid-template-columns:repeat(2,minmax(110px,1fr))}}</style></head><body><main><h1>${escapeHtml(selectedAgent.staffName)} — call report</h1><div class="muted">${escapeHtml(selectedAgent.staffEmail)} · ${selectedAgent.reports.length} submitted report${selectedAgent.reports.length === 1 ? '' : 's'} · Generated ${escapeHtml(new Date().toLocaleString())}</div><div class="stats"><div><span>Call entries</span><b>${entries.length}</b></div><div><span>Interested</span><b>${interestedCount}</b></div><div><span>No answer</span><b>${noAnswerCount}</b></div><div><span>Not interested</span><b>${notInterestedCount}</b></div></div><h2>Report entries</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Business</th><th>Contact</th><th>Notes</th><th>Status</th></tr></thead><tbody>${rowsHtml || '<tr><td colspan="5">No filled call entries.</td></tr>'}</tbody></table></div><div class="recommendation"><b>Recommendation</b><br>${escapeHtml(recommendation)}</div></main></body></html>`;
+    const file = new Blob([documentHtml], { type: 'text/html;charset=utf-8' });
+    const fileUrl = URL.createObjectURL(file);
+    const link = document.createElement('a');
+    link.href = fileUrl;
+    link.download = `flux-dev-report-${selectedAgent.staffName.trim().replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase()}-${today()}.html`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(fileUrl), 1000);
+  };
 
   return <div className="admin-reports-page">
-    <PageHeading kicker="TEAM WORKSPACE" title="Agent reports" description="Browse reports sent by your call agents and review each spreadsheet." />
+    <PageHeading kicker="TEAM WORKSPACE" title="Agent reports" description="Select an agent to review their report and a short recommendation based on their entries." action={<button className="primary-button" type="button" disabled={isLoading || !selectedAgent} onClick={downloadAgentReport}><ArrowDown size={15} /> Download report</button>} />
     <section className="panel admin-reports-panel">
-      <div className="panel-heading"><div><div className="section-eyebrow">SUBMITTED REPORTS</div><h2>Call agent reports</h2></div><span className="count-chip">{isLoading ? 'Loading' : `${reports.length} report${reports.length === 1 ? '' : 's'}`}</span></div>
+      <div className="panel-heading"><div><div className="section-eyebrow">CALL AGENT REPORTS</div><h2>Choose an agent</h2></div><span className="count-chip">{isLoading ? 'Loading' : `${filteredReports.length} report${filteredReports.length === 1 ? '' : 's'}`}</span></div>
       {error && <div className="empty-state" role="alert">{error}</div>}
+      <div className="admin-report-timeframe"><div><div className="section-eyebrow">FILTER REPORT TIMEFRAME</div><small>Choose the report dates to review.</small></div><label>From<input aria-label="Report start date" type="date" value={reportStartDate} max={reportEndDate || undefined} onChange={(event) => setReportStartDate(event.target.value)} /></label><label>To<input aria-label="Report end date" type="date" value={reportEndDate} min={reportStartDate || undefined} onChange={(event) => setReportEndDate(event.target.value)} /></label>{(reportStartDate || reportEndDate) && <button className="secondary-button" type="button" onClick={() => { setReportStartDate(''); setReportEndDate(''); }}>Clear dates</button>}</div>
       {!isLoading && !error && reports.length === 0 && <div className="admin-reports-empty"><span className="admin-reports-empty-icon"><FileSpreadsheet size={22} /></span><div><b>No reports submitted yet</b><p>Reports will appear here after a call agent submits a saved sheet.</p></div><span className="admin-reports-empty-mark">—</span></div>}
-      {reports.length > 0 && <div className="admin-report-list">{reports.map((report) => <button type="button" className={`admin-report-row${report.id === selectedId ? ' selected' : ''}`} key={report.id} onClick={() => setSelectedId(report.id)} aria-pressed={report.id === selectedId}>
-        <span className="admin-report-file"><FileSpreadsheet size={17} /></span><span className="admin-report-title"><b>{report.title}</b><small>{formatWorkDate(report.workDate)} · {entryCount(report)} filled row{entryCount(report) === 1 ? '' : 's'}</small></span><span className="admin-report-agent"><b>{report.staffName}</b><small>{report.staffEmail}</small></span><span className="admin-report-date">Updated {formatClockTime(report.updatedAt)}</span><ArrowRight size={15} />
-      </button>)}</div>}
+      {!isLoading && !error && reports.length > 0 && filteredReports.length === 0 && <div className="empty-state">No submitted reports fall within the selected timeframe.</div>}
+      {agents.length > 0 && <div className="admin-agent-report-layout">
+        <nav className="admin-agent-report-list" aria-label="Call agents with submitted reports">{agents.map((agent) => <button type="button" key={agent.staffId} className={`admin-agent-report-choice${agent.staffId === selectedAgent?.staffId ? ' selected' : ''}`} aria-pressed={agent.staffId === selectedAgent?.staffId} aria-expanded={agent.staffId === selectedAgent?.staffId && isReportOpen} aria-controls={`admin-agent-report-${agent.staffId}`} onClick={() => {
+          if (agent.staffId === selectedAgent?.staffId) setIsReportOpen((open) => !open);
+          else { setSelectedStaffId(agent.staffId); setIsReportOpen(true); }
+        }}>
+          <span className="lead-agent-avatar">{initials(agent.staffName)}</span><span className="admin-agent-report-choice-copy"><b>{agent.staffName}</b><small>{agent.reports.length} report{agent.reports.length === 1 ? '' : 's'}</small></span><ArrowRight size={15} />
+        </button>)}</nav>
+        {selectedAgent && isReportOpen && <section id={`admin-agent-report-${selectedAgent.staffId}`} className="admin-selected-agent-report" aria-label={`${selectedAgent.staffName} report`}>
+          <header className="admin-selected-report-heading"><span className="admin-report-file"><FileSpreadsheet size={17} /></span><div><h3>{selectedAgent.staffName}</h3><small>{selectedAgent.staffEmail}</small></div><span className="count-chip">{selectedAgent.reports.length} report{selectedAgent.reports.length === 1 ? '' : 's'}</span></header>
+          <div className="admin-team-report-stats"><div><span>CALL ENTRIES</span><b>{entries.length}</b></div><div><span>INTERESTED</span><b>{interestedCount}</b></div><div><span>NO ANSWER</span><b>{noAnswerCount}</b></div><div><span>NOT INTERESTED</span><b>{notInterestedCount}</b></div></div>
+          <div className="admin-team-report-section-heading"><div className="section-eyebrow">REPORT DETAILS</div><h3>{selectedAgent.reports[0]?.title || 'Call report'}</h3></div>
+          {entries.length ? <div className="admin-team-report-table-wrap"><table className="admin-team-report-table"><thead><tr>{['Date', 'Business', 'Contact', 'Notes', 'Status'].map((category) => <th key={category}>{category}</th>)}</tr></thead><tbody>{entries.map((entry, index) => <tr key={`${selectedAgent.staffId}-${index}`}><td>{entry.date}</td><td>{entry.business}</td><td>{entry.contact}</td><td>{entry.notes}</td><td>{entry.status}</td></tr>)}</tbody></table></div> : <p className="admin-report-no-entries">This agent’s submitted report does not contain filled call entries.</p>}
+          <section className="admin-team-recommendation"><div className="section-eyebrow">RECOMMENDATION</div><p>{recommendation}</p></section>
+        </section>}
+      </div>}
     </section>
-    {selected && <section className="report-workbook admin-report-preview" aria-label={`${selected.title} submitted by ${selected.staffName}`}>
-      <div className="workbook-titlebar"><FileSpreadsheet size={18} /><strong>{selected.title}</strong><span className="workbook-save-state">Submitted by {selected.staffName}</span></div>
-      <div className="admin-report-meta"><span>{selected.staffEmail}</span><span>Report day {formatWorkDate(selected.workDate)} · Updated {formatClockTime(selected.updatedAt)}</span></div>
-      <div className="spreadsheet-scroll"><table className="spreadsheet-grid"><thead><tr><th className="row-number-heading" aria-label="Row number" />{REPORT_COLUMNS.map((column, index) => <th key={column} className="column-letter">{columnLabel(index)}</th>)}</tr></thead><tbody>{formatReportData(selected.data).map((row, rowIndex) => <tr key={rowIndex} className={rowIndex === 0 ? 'sheet-header-row' : ''}><th className="row-number">{rowIndex + 1}</th>{REPORT_COLUMNS.map((column, columnIndex) => <td key={column}><div className="report-preview-cell" aria-label={`Row ${rowIndex + 1}, ${column}`}>{row[columnIndex] || ''}</div></td>)}</tr>)}</tbody></table></div>
-      <div className="workbook-bottom"><div className="sheet-tab"><span>▦</span> Report 1</div><span className="sheet-hint">{entryCount(selected)} filled rows</span><span className="sheet-status">Submitted by {selected.staffName}</span></div>
-    </section>}
   </div>;
 }
 

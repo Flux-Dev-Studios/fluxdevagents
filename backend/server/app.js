@@ -80,11 +80,13 @@ const findWorkspaceCallDuplicates = async (client, calls, contactIds = []) => {
   return findCallDuplicates(existing, calls);
 };
 
-async function distributeApprovedContacts(client, contactIds = null) {
+async function distributeApprovedContacts(client, contactIds = null, agentIds = null) {
   const { rows: agents } = await client.query(
     `SELECT id FROM staff_users
      WHERE approved = TRUE AND active = TRUE AND role = 'call-agent'
+       AND ($1::uuid[] IS NULL OR id = ANY($1::uuid[]))
      ORDER BY created_at, id`,
+    [agentIds],
   );
   if (!agents.length) return [];
 
@@ -380,12 +382,21 @@ app.patch('/api/team/:id/active', requireUser, requireAdmin, asyncRoute(async (r
   finally { client.release(); }
 }));
 app.delete('/api/team/:id', requireUser, requireAdmin, asyncRoute(async (req, res) => {
-  const { rows } = await pool.query(
-    `DELETE FROM staff_users WHERE id = $1 AND role <> 'admin' RETURNING id`,
-    [req.params.id],
-  );
-  if (!rows[0]) return res.status(404).json({ error: 'Staff account not found.' });
-  return res.status(204).end();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const staff = await client.query('SELECT id FROM staff_users WHERE id = $1 AND role <> $2 FOR UPDATE', [req.params.id, 'admin']);
+    if (!staff.rows[0]) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Staff account not found.' }); }
+    const archive = await client.query('SELECT 1 FROM staff_reports WHERE staff_id = $1 LIMIT 1', [req.params.id]);
+    if (archive.rows[0]) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'This account has saved reports. Deactivate it to preserve the report archive.' });
+    }
+    await client.query('DELETE FROM staff_users WHERE id = $1', [req.params.id]);
+    await client.query('COMMIT');
+    return res.status(204).end();
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
 }));
 
 app.post('/api/contacts/batch', requireUser, requireRole('contact-generator'), asyncRoute(async (req, res) => {
@@ -491,9 +502,13 @@ app.delete('/api/my-contacts/:id', requireUser, requireRole('contact-generator')
 
 app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRoute(async (req, res) => {
   const contactIds = Array.isArray(req.body.contactIds) ? [...new Set(req.body.contactIds.map(String))] : [];
+  const agentIds = Array.isArray(req.body.agentIds) ? [...new Set(req.body.agentIds.map(String))] : [];
   const validUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (!contactIds.length || contactIds.length > 1000 || contactIds.some((id) => !validUuid.test(id))) {
     return res.status(400).json({ error: 'Select between 1 and 1000 valid leads to approve.' });
+  }
+  if (!agentIds.length || agentIds.some((id) => !validUuid.test(id))) {
+    return res.status(400).json({ error: 'Choose at least one valid active Call agent to receive these leads.' });
   }
   const client = await pool.connect();
   try {
@@ -514,11 +529,13 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
     const availableAgents = await client.query(
       `SELECT id FROM staff_users
        WHERE approved = TRUE AND active = TRUE AND role = 'call-agent'
+         AND id = ANY($1::uuid[])
        ORDER BY created_at, id`,
+      [agentIds],
     );
-    if (!availableAgents.rows.length) {
+    if (availableAgents.rows.length !== agentIds.length) {
       await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'There are no approved, active Call agents available. The leads are still waiting for approval.' });
+      return res.status(409).json({ error: 'One or more selected Call agents are no longer active. Refresh and choose active agents.' });
     }
     const pendingIds = pending.rows.map((contact) => contact.id);
     const alreadyShared = await client.query(
@@ -541,7 +558,7 @@ app.patch('/api/contact-agents/:id/approval', requireUser, requireAdmin, asyncRo
         [eligibleIds, req.params.id],
       )
       : { rows: [] };
-    const calls = await distributeApprovedContacts(client, approved.rows.map((contact) => contact.id));
+    const calls = await distributeApprovedContacts(client, approved.rows.map((contact) => contact.id), agentIds);
     if (calls.length !== approved.rows.length) {
       throw new Error(`Lead distribution mismatch: approved ${approved.rows.length}, assigned ${calls.length}.`);
     }
@@ -596,6 +613,29 @@ app.delete('/api/generated-contacts/:id', requireUser, requireAdmin, asyncRoute(
   );
   if (!rows[0]) return res.status(404).json({ error: 'Today’s lead not found.' });
   return res.status(204).end();
+}));
+
+app.delete('/api/contact-agents/:id/pending-leads', requireUser, requireAdmin, asyncRoute(async (req, res) => {
+  const validUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!validUuid.test(req.params.id)) return res.status(400).json({ error: 'Invalid lead agent.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('LOCK TABLE generated_contacts IN SHARE ROW EXCLUSIVE MODE');
+    const { rows } = await client.query(
+      `DELETE FROM generated_contacts
+       WHERE generator_id = $1 AND work_date = CURRENT_DATE AND approved_at IS NULL
+       RETURNING id::text AS id`,
+      [req.params.id],
+    );
+    await client.query('COMMIT');
+    return res.json({ deletedIds: rows.map((row) => row.id) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }));
 
 app.post('/api/calls/assign', requireUser, requireAdmin, asyncRoute(async (req, res) => {
@@ -699,7 +739,7 @@ app.post('/api/reports', requireUser, requireRole('call-agent'), asyncRoute(asyn
     }
     await client.query('SELECT id FROM staff_users WHERE id = $1 FOR UPDATE', [req.user.id]);
     const current = await client.query(
-      `SELECT id FROM staff_reports WHERE staff_id = $1 AND work_date = CURRENT_DATE
+      `SELECT id FROM staff_reports WHERE staff_id = $1 AND work_date = CURRENT_DATE AND submitted_at IS NULL
        ORDER BY updated_at DESC, created_at DESC LIMIT 1 FOR UPDATE`,
       [req.user.id],
     );
@@ -728,7 +768,7 @@ app.post('/api/reports', requireUser, requireRole('call-agent'), asyncRoute(asyn
 app.post('/api/reports/:id/send', requireUser, requireRole('call-agent'), asyncRoute(async (req, res) => {
   const { rows } = await pool.query(
     `UPDATE staff_reports SET submitted_at = NOW(), updated_at = NOW()
-     WHERE id = $1 AND staff_id = $2 AND work_date = CURRENT_DATE
+     WHERE id = $1 AND staff_id = $2 AND work_date = CURRENT_DATE AND submitted_at IS NULL
      RETURNING id, title, data, work_date AS "workDate", updated_at AS "updatedAt", submitted_at AS "submittedAt"`,
     [req.params.id, req.user.id],
   );
@@ -740,8 +780,8 @@ app.patch('/api/reports/:id', requireUser, requireRole('call-agent'), asyncRoute
   const data = normalizeReportData(req.body.data);
   if (!title || !data) return res.status(400).json({ error: 'Add a report name and a valid sheet with up to 200 rows and 12 columns.' });
   const { rows } = await pool.query(
-    `UPDATE staff_reports SET title = $3, data = $4::jsonb, updated_at = NOW(), submitted_at = NULL
-     WHERE id = $1 AND staff_id = $2 AND work_date = CURRENT_DATE
+    `UPDATE staff_reports SET title = $3, data = $4::jsonb, updated_at = NOW()
+     WHERE id = $1 AND staff_id = $2 AND work_date = CURRENT_DATE AND submitted_at IS NULL
      RETURNING id, title, data, work_date AS "workDate", updated_at AS "updatedAt", submitted_at AS "submittedAt"`,
     [req.params.id, req.user.id, title, JSON.stringify(data)],
   );
@@ -749,9 +789,9 @@ app.patch('/api/reports/:id', requireUser, requireRole('call-agent'), asyncRoute
   return res.json({ report: rows[0] });
 }));
 app.delete('/api/reports/:id', requireUser, requireRole('call-agent'), asyncRoute(async (req, res) => {
-  const { rows } = await pool.query('DELETE FROM staff_reports WHERE id = $1 AND staff_id = $2 AND work_date = CURRENT_DATE RETURNING id', [req.params.id, req.user.id]);
+  const { rows } = await pool.query('SELECT submitted_at AS "submittedAt" FROM staff_reports WHERE id = $1 AND staff_id = $2', [req.params.id, req.user.id]);
   if (!rows[0]) return res.status(404).json({ error: 'Report not found.' });
-  return res.status(204).end();
+  return res.status(409).json({ error: 'Saved reports are kept in the archive and cannot be deleted.' });
 }));
 app.get('/api/admin/reports', requireUser, requireAdmin, asyncRoute(async (_req, res) => {
   const { rows } = await pool.query(
